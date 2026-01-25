@@ -1,0 +1,5 @@
+# CRM Dataset Builder Dependencies
+
+# Faker - for generating realistic fake data
+# https://faker.readthedocs.io/
+faker>=20.0.0
