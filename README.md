@@ -26,6 +26,16 @@ crm-dataset-builder/
 ```bash
 python src/main.py
 ```
+## Built With
+- Python 3.x
+- Claude Code (AI-assisted development)
+- Faker library for realistic data generation
+- pandas for data manipulation
+
+## Development Approach
+This project was developed using Claude Code for AI-assisted development, 
+demonstrating modern development workflows and the ability to effectively 
+leverage AI tools for rapid prototyping and production code.
 
 ## License
 
