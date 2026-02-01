@@ -7,19 +7,45 @@ demonstrations, and development purposes.
 Usage:
     python src/main.py
 
-The tool will prompt you for the number of companies to generate,
-then create a CSV file in the output directory.
+The tool presents a menu to generate accounts, contacts, or both.
+Output CSV files are saved to the output directory.
 """
 
 import csv
 import os
 import sys
+from collections import Counter
 
 # Add the src directory to the path so we can import our modules
 # This allows running the script from the project root directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from generators import AccountGenerator
+from generators import AccountGenerator, ContactGenerator
+
+
+# Path helpers
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ACCOUNTS_PATH = os.path.join(PROJECT_ROOT, "output", "accounts.csv")
+CONTACTS_PATH = os.path.join(PROJECT_ROOT, "output", "contacts.csv")
+
+
+def display_menu() -> str:
+    """
+    Display the main menu and return the user's choice.
+
+    Returns:
+        The selected option as a string ('1', '2', or '3').
+    """
+    print("\nWhat would you like to generate?")
+    print("  1) Accounts")
+    print("  2) Contacts")
+    print("  3) All (accounts + contacts)")
+
+    while True:
+        choice = input("\nSelect an option [1/2/3]: ").strip()
+        if choice in ("1", "2", "3"):
+            return choice
+        print("Invalid choice. Please enter 1, 2, or 3.")
 
 
 def get_user_input() -> int:
@@ -93,7 +119,6 @@ def save_to_csv(accounts: list, filepath: str) -> None:
         writer.writeheader()
 
         # Write each account as a row
-        # Convert dataclass to dict using __dict__
         for account in accounts:
             writer.writerow({
                 "id": account.id,
@@ -108,16 +133,132 @@ def save_to_csv(accounts: list, filepath: str) -> None:
             })
 
 
+def save_contacts_to_csv(contacts: list, filepath: str) -> None:
+    """
+    Save generated contacts to a CSV file.
+
+    Creates the output directory if it doesn't exist.
+
+    Args:
+        contacts: List of Contact dataclass instances.
+        filepath: Path where the CSV file should be saved.
+    """
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+    fieldnames = [
+        "contact_id",
+        "first_name",
+        "last_name",
+        "email",
+        "phone",
+        "title",
+        "department",
+        "account_id",
+        "contact_owner",
+    ]
+
+    with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for contact in contacts:
+            writer.writerow({
+                "contact_id": contact.contact_id,
+                "first_name": contact.first_name,
+                "last_name": contact.last_name,
+                "email": contact.email,
+                "phone": contact.phone,
+                "title": contact.title,
+                "department": contact.department,
+                "account_id": contact.account_id,
+                "contact_owner": contact.contact_owner,
+            })
+
+
+def generate_accounts_flow() -> None:
+    """Run the accounts generation workflow."""
+    count = get_user_input()
+
+    generator = AccountGenerator()
+
+    print(f"\nGenerating {count} companies...")
+    accounts = generator.generate(count)
+
+    save_to_csv(accounts, ACCOUNTS_PATH)
+
+    print("\n" + "-" * 50)
+    print("Success!")
+    print(f"  Generated {count} company records")
+    print(f"  Saved to: {ACCOUNTS_PATH}")
+    print("-" * 50)
+
+    # Preview first few records
+    print("\nPreview of generated data:")
+    print("-" * 50)
+    for account in accounts[:3]:
+        print(f"  - {account.company_name}")
+        print(f"    Industry: {account.industry}")
+        print(f"    Employees: {account.employee_count:,} | Revenue: ${account.annual_revenue:,}")
+        print()
+
+
+def generate_contacts_flow() -> None:
+    """Run the contacts generation workflow."""
+    if not os.path.exists(ACCOUNTS_PATH):
+        print("\n[!] accounts.csv not found at: " + ACCOUNTS_PATH)
+        print("    Please generate accounts first (option 1) or run all (option 3).")
+        return
+
+    print(f"\nLoading accounts from: {ACCOUNTS_PATH}")
+    generator = ContactGenerator(ACCOUNTS_PATH)
+
+    print(f"Generating contacts for {len(generator.accounts)} accounts...")
+    contacts = generator.generate()
+
+    save_contacts_to_csv(contacts, CONTACTS_PATH)
+
+    # Summary stats
+    total = len(contacts)
+    contacts_per_account = Counter(c.account_id for c in contacts)
+    count_distribution = Counter(contacts_per_account.values())
+    owner_distribution = Counter(c.contact_owner for c in contacts)
+
+    print("\n" + "-" * 50)
+    print("Success!")
+    print(f"  Generated {total} contacts across {len(contacts_per_account)} accounts")
+    print(f"  Saved to: {CONTACTS_PATH}")
+    print("-" * 50)
+
+    print("\nContacts per account breakdown:")
+    for n in sorted(count_distribution):
+        pct = count_distribution[n] / len(contacts_per_account) * 100
+        print(f"  {n} contacts: {count_distribution[n]} accounts ({pct:.0f}%)")
+
+    print("\nContact owner distribution:")
+    for owner, cnt in owner_distribution.most_common():
+        print(f"  {owner}: {cnt} contacts")
+
+    # Preview first few records
+    print("\nPreview of generated contacts:")
+    print("-" * 50)
+    for contact in contacts[:3]:
+        print(f"  - {contact.first_name} {contact.last_name}")
+        print(f"    {contact.title}, {contact.department}")
+        print(f"    {contact.email} | Account #{contact.account_id}")
+        print()
+
+
+def generate_all_flow() -> None:
+    """Run accounts then contacts generation sequentially."""
+    generate_accounts_flow()
+    generate_contacts_flow()
+
+
 def main():
     """
     Main entry point for the CRM Dataset Builder.
 
-    Workflow:
-    1. Display welcome message
-    2. Prompt user for number of companies
-    3. Generate the account data
-    4. Save to CSV file
-    5. Display success message
+    Displays a menu and routes to the selected generation workflow.
     """
     # Display welcome banner
     print("\n" + "=" * 50)
@@ -125,40 +266,14 @@ def main():
     print("  Generate realistic B2B SaaS company data")
     print("=" * 50)
 
-    # Get the number of companies to generate from user
-    count = get_user_input()
+    choice = display_menu()
 
-    # Create the generator instance
-    # Note: You can pass a seed for reproducible results, e.g., AccountGenerator(seed=42)
-    generator = AccountGenerator()
-
-    # Generate the accounts with a progress message
-    print(f"\nGenerating {count} companies...")
-    accounts = generator.generate(count)
-
-    # Define the output file path
-    # Using os.path to construct path relative to project root
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    output_path = os.path.join(project_root, "output", "accounts.csv")
-
-    # Save the generated data to CSV
-    save_to_csv(accounts, output_path)
-
-    # Display success message
-    print("\n" + "-" * 50)
-    print("✓ Success!")
-    print(f"  Generated {count} company records")
-    print(f"  Saved to: {output_path}")
-    print("-" * 50)
-
-    # Show a preview of the first few records
-    print("\nPreview of generated data:")
-    print("-" * 50)
-    for account in accounts[:3]:
-        print(f"  • {account.company_name}")
-        print(f"    Industry: {account.industry}")
-        print(f"    Employees: {account.employee_count:,} | Revenue: ${account.annual_revenue:,}")
-        print()
+    if choice == "1":
+        generate_accounts_flow()
+    elif choice == "2":
+        generate_contacts_flow()
+    elif choice == "3":
+        generate_all_flow()
 
 
 if __name__ == "__main__":

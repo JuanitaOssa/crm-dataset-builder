@@ -6,5 +6,6 @@ such as accounts, contacts, opportunities, etc.
 """
 
 from .accounts import AccountGenerator
+from .contacts import ContactGenerator
 
-__all__ = ["AccountGenerator"]
+__all__ = ["AccountGenerator", "ContactGenerator"]
