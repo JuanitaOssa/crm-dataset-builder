@@ -24,6 +24,9 @@ class ZohoExporter(BaseCRMExporter):
     Owner identifiers use email format: sarah.chen@testcompany.com
     """
 
+    def __init__(self, accounts_df, contacts_df, deals_df, activities_df, profile=None):
+        super().__init__(accounts_df, contacts_df, deals_df, activities_df, profile=profile)
+
     def crm_name(self) -> str:
         return "Zoho"
 
@@ -58,7 +61,7 @@ class ZohoExporter(BaseCRMExporter):
         }
 
     def deal_field_mapping(self) -> Dict[str, str]:
-        return {
+        mapping = {
             "deal_name": "Deal_Name",
             "pipeline": "Pipeline",
             "stage": "Stage",
@@ -68,6 +71,9 @@ class ZohoExporter(BaseCRMExporter):
             "deal_status": "Status",
             "deal_owner": "Owner",
         }
+        if "subscription_type" in self.profile.deal_fields:
+            mapping["subscription_type"] = "Subscription_Type"
+        return mapping
 
     def activity_field_mapping(self) -> Dict[str, str]:
         return {

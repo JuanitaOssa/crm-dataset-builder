@@ -29,27 +29,23 @@ class BaseCRMExporter(ABC):
         4. Add the import to src/exporters/__init__.py
     """
 
-    # The 6 sales reps used across all generators
-    SALES_REPS = [
-        "Sarah Chen",
-        "Marcus Johnson",
-        "Emily Rodriguez",
-        "David Kim",
-        "Rachel Thompson",
-        "James O'Brien",
-    ]
-
     def __init__(
         self,
         accounts_df: pd.DataFrame,
         contacts_df: pd.DataFrame,
         deals_df: pd.DataFrame,
         activities_df: pd.DataFrame,
+        profile=None,
     ):
         self.accounts_df = accounts_df.copy()
         self.contacts_df = contacts_df.copy()
         self.deals_df = deals_df.copy()
         self.activities_df = activities_df.copy()
+
+        if profile is None:
+            from profiles.b2b_saas import B2BSaaSProfile
+            profile = B2BSaaSProfile()
+        self.profile = profile
 
     # ------------------------------------------------------------------ #
     #  Abstract methods — subclasses must implement these                  #
@@ -119,9 +115,11 @@ class BaseCRMExporter(ABC):
         """
         result = df.copy()
 
-        # Map owner values before renaming columns
+        # Map owner values before renaming columns — skip empty owners
         if owner_col and owner_col in result.columns:
-            result[owner_col] = result[owner_col].apply(self.format_owner)
+            result[owner_col] = result[owner_col].apply(
+                lambda v: self.format_owner(v) if v else ""
+            )
 
         # Map activity types before renaming columns
         if activity_type_col and activity_type_col in result.columns:
@@ -138,7 +136,7 @@ class BaseCRMExporter(ABC):
     def generate_users_file(self) -> pd.DataFrame:
         """Generate a users/owners reference file for the CRM."""
         rows = []
-        for name in self.SALES_REPS:
+        for name in self.profile.sales_reps:
             parts = name.split()
             rows.append({
                 "full_name": name,

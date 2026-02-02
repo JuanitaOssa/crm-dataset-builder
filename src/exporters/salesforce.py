@@ -25,6 +25,9 @@ class SalesforceExporter(BaseCRMExporter):
     Owner identifiers use username format: sarah.chen
     """
 
+    def __init__(self, accounts_df, contacts_df, deals_df, activities_df, profile=None):
+        super().__init__(accounts_df, contacts_df, deals_df, activities_df, profile=profile)
+
     def crm_name(self) -> str:
         return "Salesforce"
 
@@ -59,7 +62,7 @@ class SalesforceExporter(BaseCRMExporter):
         }
 
     def deal_field_mapping(self) -> Dict[str, str]:
-        return {
+        mapping = {
             "deal_name": "Name",
             "stage": "StageName",
             "amount": "Amount",
@@ -68,6 +71,9 @@ class SalesforceExporter(BaseCRMExporter):
             "deal_status": "Status",
             "deal_owner": "Owner",
         }
+        if "subscription_type" in self.profile.deal_fields:
+            mapping["subscription_type"] = "Subscription_Type__c"
+        return mapping
 
     def activity_field_mapping(self) -> Dict[str, str]:
         return {

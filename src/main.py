@@ -2,16 +2,19 @@
 CRM Dataset Builder
 
 A command-line tool for generating realistic CRM data for testing,
-demonstrations, and development purposes.
+demonstrations, and development purposes. Supports multiple business
+types (B2B SaaS, Manufacturer, Consultancy) via a profile system.
 
 Usage:
     python src/main.py
 
-The tool presents a menu to generate accounts, contacts, deals, activities,
-or all four. Output CSV files are saved to the output directory.
+The tool presents a business type selector and menu to generate accounts,
+contacts, deals, activities, or all four. Output CSV files are saved to
+the output directory.
 """
 
 import csv
+import dataclasses
 import os
 import sys
 from collections import Counter
@@ -20,6 +23,7 @@ from collections import Counter
 # This allows running the script from the project root directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from profiles import PROFILE_REGISTRY
 from generators import AccountGenerator, ContactGenerator, DealGenerator, ActivityGenerator
 from exporters import HubSpotExporter, SalesforceExporter, ZohoExporter
 
@@ -30,6 +34,34 @@ ACCOUNTS_PATH = os.path.join(PROJECT_ROOT, "output", "accounts.csv")
 CONTACTS_PATH = os.path.join(PROJECT_ROOT, "output", "contacts.csv")
 DEALS_PATH = os.path.join(PROJECT_ROOT, "output", "deals.csv")
 ACTIVITIES_PATH = os.path.join(PROJECT_ROOT, "output", "activities.csv")
+
+
+def select_business_type():
+    """
+    Display the business type selector and return the selected profile.
+
+    Returns:
+        An instantiated profile object.
+    """
+    print("\nSelect a business type:")
+    options = list(PROFILE_REGISTRY.keys())
+    for i, name in enumerate(options, 1):
+        profile_cls = PROFILE_REGISTRY[name]
+        p = profile_cls()
+        print(f"  {i}) {name} — {p.description}")
+
+    while True:
+        choice = input(f"\nSelect business type [1-{len(options)}]: ").strip()
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(options):
+                selected = options[idx]
+                profile = PROFILE_REGISTRY[selected]()
+                print(f"\n  Selected: {profile.name}")
+                return profile
+        except ValueError:
+            pass
+        print(f"Invalid choice. Please enter 1-{len(options)}.")
 
 
 def display_menu() -> str:
@@ -90,7 +122,7 @@ def get_user_input() -> int:
             print("Invalid input. Please enter a number.")
 
 
-def save_to_csv(accounts: list, filepath: str) -> None:
+def save_to_csv(accounts: list, filepath: str, profile) -> None:
     """
     Save generated accounts to a CSV file.
 
@@ -100,107 +132,85 @@ def save_to_csv(accounts: list, filepath: str) -> None:
     Args:
         accounts: List of Account dataclass instances.
         filepath: Path where the CSV file should be saved.
+        profile: The profile instance for field names.
     """
-    # Ensure the output directory exists
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    fieldnames = profile.account_fields
 
-    # Define the column headers (matching Account dataclass fields)
-    fieldnames = [
-        "id",
-        "company_name",
-        "industry",
-        "employee_count",
-        "annual_revenue",
-        "street_address",
-        "city",
-        "state",
-        "zip_code",
-        "country",
-        "region",
-        "founded_year",
-        "website",
-        "description",
-    ]
-
-    # Write the CSV file
     with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
-        # Write the header row
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
-
-        # Write each account as a row
         for account in accounts:
-            writer.writerow({
-                "id": account.id,
-                "company_name": account.company_name,
-                "industry": account.industry,
-                "employee_count": account.employee_count,
-                "annual_revenue": account.annual_revenue,
-                "street_address": account.street_address,
-                "city": account.city,
-                "state": account.state,
-                "zip_code": account.zip_code,
-                "country": account.country,
-                "region": account.region,
-                "founded_year": account.founded_year,
-                "website": account.website,
-                "description": account.description,
-            })
+            writer.writerow(dataclasses.asdict(account))
 
 
-def save_contacts_to_csv(contacts: list, filepath: str) -> None:
+def save_contacts_to_csv(contacts: list, filepath: str, profile) -> None:
     """
     Save generated contacts to a CSV file.
-
-    Creates the output directory if it doesn't exist.
 
     Args:
         contacts: List of Contact dataclass instances.
         filepath: Path where the CSV file should be saved.
+        profile: The profile instance for field names.
     """
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-
-    fieldnames = [
-        "contact_id",
-        "first_name",
-        "last_name",
-        "email",
-        "phone",
-        "title",
-        "department",
-        "account_id",
-        "contact_owner",
-    ]
+    fieldnames = profile.contact_fields
 
     with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
-
         for contact in contacts:
-            writer.writerow({
-                "contact_id": contact.contact_id,
-                "first_name": contact.first_name,
-                "last_name": contact.last_name,
-                "email": contact.email,
-                "phone": contact.phone,
-                "title": contact.title,
-                "department": contact.department,
-                "account_id": contact.account_id,
-                "contact_owner": contact.contact_owner,
-            })
+            writer.writerow(dataclasses.asdict(contact))
 
 
-def generate_accounts_flow() -> None:
+def save_deals_to_csv(deals: list, filepath: str, profile) -> None:
+    """
+    Save generated deals to a CSV file.
+
+    Args:
+        deals: List of Deal dataclass instances.
+        filepath: Path where the CSV file should be saved.
+        profile: The profile instance for field names.
+    """
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    fieldnames = profile.deal_fields
+
+    with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for deal in deals:
+            writer.writerow(dataclasses.asdict(deal))
+
+
+def save_activities_to_csv(activities: list, filepath: str, profile) -> None:
+    """
+    Save generated activities to a CSV file.
+
+    Args:
+        activities: List of Activity dataclass instances.
+        filepath: Path where the CSV file should be saved.
+        profile: The profile instance for field names.
+    """
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    fieldnames = profile.activity_fields
+
+    with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for activity in activities:
+            writer.writerow(dataclasses.asdict(activity))
+
+
+def generate_accounts_flow(profile) -> None:
     """Run the accounts generation workflow."""
     count = get_user_input()
 
-    generator = AccountGenerator()
+    generator = AccountGenerator(profile=profile)
 
     print(f"\nGenerating {count} companies...")
     accounts = generator.generate(count)
 
-    save_to_csv(accounts, ACCOUNTS_PATH)
+    save_to_csv(accounts, ACCOUNTS_PATH, profile)
 
     print("\n" + "-" * 50)
     print("Success!")
@@ -218,7 +228,7 @@ def generate_accounts_flow() -> None:
         print()
 
 
-def generate_contacts_flow() -> None:
+def generate_contacts_flow(profile) -> None:
     """Run the contacts generation workflow."""
     if not os.path.exists(ACCOUNTS_PATH):
         print("\n[!] accounts.csv not found at: " + ACCOUNTS_PATH)
@@ -226,12 +236,12 @@ def generate_contacts_flow() -> None:
         return
 
     print(f"\nLoading accounts from: {ACCOUNTS_PATH}")
-    generator = ContactGenerator(ACCOUNTS_PATH)
+    generator = ContactGenerator(ACCOUNTS_PATH, profile=profile)
 
     print(f"Generating contacts for {len(generator.accounts)} accounts...")
     contacts = generator.generate()
 
-    save_contacts_to_csv(contacts, CONTACTS_PATH)
+    save_contacts_to_csv(contacts, CONTACTS_PATH, profile)
 
     # Summary stats
     total = len(contacts)
@@ -264,57 +274,7 @@ def generate_contacts_flow() -> None:
         print()
 
 
-def save_deals_to_csv(deals: list, filepath: str) -> None:
-    """
-    Save generated deals to a CSV file.
-
-    Creates the output directory if it doesn't exist.
-
-    Args:
-        deals: List of Deal dataclass instances.
-        filepath: Path where the CSV file should be saved.
-    """
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-
-    fieldnames = [
-        "deal_id",
-        "deal_name",
-        "account_id",
-        "contact_id",
-        "pipeline",
-        "segment",
-        "stage",
-        "amount",
-        "created_date",
-        "close_date",
-        "deal_status",
-        "deal_owner",
-        "loss_reason",
-    ]
-
-    with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for deal in deals:
-            writer.writerow({
-                "deal_id": deal.deal_id,
-                "deal_name": deal.deal_name,
-                "account_id": deal.account_id,
-                "contact_id": deal.contact_id,
-                "pipeline": deal.pipeline,
-                "segment": deal.segment,
-                "stage": deal.stage,
-                "amount": deal.amount,
-                "created_date": deal.created_date,
-                "close_date": deal.close_date,
-                "deal_status": deal.deal_status,
-                "deal_owner": deal.deal_owner,
-                "loss_reason": deal.loss_reason,
-            })
-
-
-def generate_deals_flow() -> None:
+def generate_deals_flow(profile) -> None:
     """Run the deals generation workflow."""
     if not os.path.exists(ACCOUNTS_PATH):
         print("\n[!] accounts.csv not found at: " + ACCOUNTS_PATH)
@@ -328,12 +288,12 @@ def generate_deals_flow() -> None:
 
     print(f"\nLoading accounts from: {ACCOUNTS_PATH}")
     print(f"Loading contacts from: {CONTACTS_PATH}")
-    generator = DealGenerator(ACCOUNTS_PATH, CONTACTS_PATH)
+    generator = DealGenerator(ACCOUNTS_PATH, CONTACTS_PATH, profile=profile)
 
     print(f"Generating deals for {len(generator.accounts)} accounts...")
     deals = generator.generate()
 
-    save_deals_to_csv(deals, DEALS_PATH)
+    save_deals_to_csv(deals, DEALS_PATH, profile)
 
     # Summary stats
     total = len(deals)
@@ -353,16 +313,16 @@ def generate_deals_flow() -> None:
     print("-" * 50)
 
     print("\nPipeline breakdown:")
-    for pipeline in ["New Business", "Renewal", "Expansion"]:
-        print(f"  {pipeline}: {pipeline_counts.get(pipeline, 0)} deals")
+    for pipeline_name in profile.pipelines.keys():
+        print(f"  {pipeline_name}: {pipeline_counts.get(pipeline_name, 0)} deals")
 
     print("\nSegment breakdown:")
-    for segment in ["SMB", "Mid-Market", "Enterprise"]:
+    for segment in profile.segments:
         print(f"  {segment}: {segment_counts.get(segment, 0)} deals")
 
     print("\nOutcome rates by pipeline:")
-    for pipeline in ["New Business", "Renewal", "Expansion"]:
-        pipe_deals = [d for d in deals if d.pipeline == pipeline]
+    for pipeline_name in profile.pipelines.keys():
+        pipe_deals = [d for d in deals if d.pipeline == pipeline_name]
         if not pipe_deals:
             continue
         won = sum(1 for d in pipe_deals if d.deal_status == "Won")
@@ -370,13 +330,13 @@ def generate_deals_flow() -> None:
         open_deals = sum(1 for d in pipe_deals if d.deal_status == "Open")
         n = len(pipe_deals)
         print(
-            f"  {pipeline}: Won {won}/{n} ({won/n*100:.0f}%) | "
+            f"  {pipeline_name}: Won {won}/{n} ({won/n*100:.0f}%) | "
             f"Lost {lost}/{n} ({lost/n*100:.0f}%) | "
             f"Open {open_deals}/{n} ({open_deals/n*100:.0f}%)"
         )
 
     print("\nAverage deal size by segment:")
-    for segment in ["SMB", "Mid-Market", "Enterprise"]:
+    for segment in profile.segments:
         seg_deals = [d for d in deals if d.segment == segment]
         if seg_deals:
             avg = sum(d.amount for d in seg_deals) / len(seg_deals)
@@ -392,53 +352,7 @@ def generate_deals_flow() -> None:
         print()
 
 
-def save_activities_to_csv(activities: list, filepath: str) -> None:
-    """
-    Save generated activities to a CSV file.
-
-    Creates the output directory if it doesn't exist.
-
-    Args:
-        activities: List of Activity dataclass instances.
-        filepath: Path where the CSV file should be saved.
-    """
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-
-    fieldnames = [
-        "activity_id",
-        "activity_type",
-        "subject",
-        "activity_date",
-        "account_id",
-        "contact_id",
-        "deal_id",
-        "completed",
-        "duration_minutes",
-        "notes",
-        "activity_owner",
-    ]
-
-    with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for activity in activities:
-            writer.writerow({
-                "activity_id": activity.activity_id,
-                "activity_type": activity.activity_type,
-                "subject": activity.subject,
-                "activity_date": activity.activity_date,
-                "account_id": activity.account_id,
-                "contact_id": activity.contact_id,
-                "deal_id": activity.deal_id,
-                "completed": activity.completed,
-                "duration_minutes": activity.duration_minutes,
-                "notes": activity.notes,
-                "activity_owner": activity.activity_owner,
-            })
-
-
-def generate_activities_flow() -> None:
+def generate_activities_flow(profile) -> None:
     """Run the activities generation workflow."""
     if not os.path.exists(ACCOUNTS_PATH):
         print("\n[!] accounts.csv not found at: " + ACCOUNTS_PATH)
@@ -458,14 +372,14 @@ def generate_activities_flow() -> None:
     print(f"\nLoading accounts from: {ACCOUNTS_PATH}")
     print(f"Loading contacts from: {CONTACTS_PATH}")
     print(f"Loading deals from: {DEALS_PATH}")
-    generator = ActivityGenerator(ACCOUNTS_PATH, CONTACTS_PATH, DEALS_PATH)
+    generator = ActivityGenerator(ACCOUNTS_PATH, CONTACTS_PATH, DEALS_PATH, profile=profile)
 
     total_deals = len(generator.deals)
     total_accounts = len(generator.accounts)
     print(f"Generating activities for {total_deals} deals across {total_accounts} accounts...")
     activities = generator.generate()
 
-    save_activities_to_csv(activities, ACTIVITIES_PATH)
+    save_activities_to_csv(activities, ACTIVITIES_PATH, profile)
 
     # --- Summary stats ---
     total = len(activities)
@@ -518,7 +432,7 @@ def generate_activities_flow() -> None:
     print("-" * 50)
 
     print("\nActivity type breakdown:")
-    for atype in ["Email", "Phone Call", "Meeting", "LinkedIn", "Note"]:
+    for atype in profile.activity_types:
         cnt = type_counts.get(atype, 0)
         pct = cnt / total * 100 if total else 0
         print(f"  {atype}: {cnt} ({pct:.0f}%)")
@@ -529,7 +443,7 @@ def generate_activities_flow() -> None:
     print(f"  Open deals:   {avg_active:.1f} avg ({len(active_counts)} deals)")
 
     print("\nDeal-linked activities by segment:")
-    for seg in ["SMB", "Mid-Market", "Enterprise"]:
+    for seg in profile.segments:
         print(f"  {seg}: {segment_activity_counts.get(seg, 0)} activities")
 
     print(f"\nAccounts with zero activities: {len(zero_activity_accounts)}")
@@ -545,15 +459,15 @@ def generate_activities_flow() -> None:
         print()
 
 
-def generate_all_flow() -> None:
+def generate_all_flow(profile) -> None:
     """Run accounts, contacts, deals, then activities generation sequentially."""
-    generate_accounts_flow()
-    generate_contacts_flow()
-    generate_deals_flow()
-    generate_activities_flow()
+    generate_accounts_flow(profile)
+    generate_contacts_flow(profile)
+    generate_deals_flow(profile)
+    generate_activities_flow(profile)
 
 
-def generate_crm_export_flow() -> None:
+def generate_crm_export_flow(profile) -> None:
     """Run the CRM export workflow using existing generated CSVs."""
     import pandas as pd
 
@@ -592,7 +506,7 @@ def generate_crm_export_flow() -> None:
     activities_df = pd.read_csv(ACTIVITIES_PATH)
 
     print(f"\nExporting for {crm_name}...")
-    exporter = ExporterClass(accounts_df, contacts_df, deals_df, activities_df)
+    exporter = ExporterClass(accounts_df, contacts_df, deals_df, activities_df, profile=profile)
     files = exporter.export()
 
     # Save to output/{crm_name}/ directory
@@ -622,28 +536,31 @@ def main():
     """
     Main entry point for the CRM Dataset Builder.
 
-    Displays a menu and routes to the selected generation workflow.
+    Displays a business type selector and menu, routes to the selected
+    generation workflow.
     """
     # Display welcome banner
     print("\n" + "=" * 50)
     print("  CRM Dataset Builder")
-    print("  Generate realistic B2B SaaS company data")
+    print("  Generate realistic CRM company data")
     print("=" * 50)
+
+    profile = select_business_type()
 
     choice = display_menu()
 
     if choice == "1":
-        generate_accounts_flow()
+        generate_accounts_flow(profile)
     elif choice == "2":
-        generate_contacts_flow()
+        generate_contacts_flow(profile)
     elif choice == "3":
-        generate_deals_flow()
+        generate_deals_flow(profile)
     elif choice == "4":
-        generate_activities_flow()
+        generate_activities_flow(profile)
     elif choice == "5":
-        generate_all_flow()
+        generate_all_flow(profile)
     elif choice == "6":
-        generate_crm_export_flow()
+        generate_crm_export_flow(profile)
 
 
 if __name__ == "__main__":

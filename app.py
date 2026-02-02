@@ -1,9 +1,9 @@
 """
 CRM Dataset Builder — Streamlit Web Interface
 
-A web UI for generating realistic, relational B2B SaaS CRM datasets.
-Wraps the existing generator classes (AccountGenerator, ContactGenerator,
-DealGenerator, ActivityGenerator) with an interactive Streamlit frontend.
+A web UI for generating realistic, relational CRM datasets for multiple
+business types. Wraps the generator classes with an interactive Streamlit
+frontend.
 
 Run with:
     streamlit run app.py
@@ -27,6 +27,7 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 
+from profiles import PROFILE_REGISTRY
 from generators import AccountGenerator, ContactGenerator
 from generators.deals import DealGenerator, Deal
 from generators.activities import ActivityGenerator, Activity
@@ -37,38 +38,20 @@ from exporters import HubSpotExporter, SalesforceExporter, ZohoExporter
 #  Helper functions                                                      #
 # ===================================================================== #
 
-# Column orders matching the dataclass fields (used for CSV and display)
-ACCOUNT_FIELDS = [
-    "id", "company_name", "industry", "employee_count",
-    "annual_revenue", "street_address", "city", "state", "zip_code",
-    "country", "region", "founded_year", "website", "description",
-]
-CONTACT_FIELDS = [
-    "contact_id", "first_name", "last_name", "email", "phone",
-    "title", "department", "account_id", "contact_owner",
-]
-DEAL_FIELDS = [
-    "deal_id", "deal_name", "account_id", "contact_id", "pipeline",
-    "segment", "stage", "amount", "created_date", "close_date",
-    "deal_status", "deal_owner", "loss_reason",
-]
-ACTIVITY_FIELDS = [
-    "activity_id", "activity_type", "subject", "activity_date",
-    "account_id", "contact_id", "deal_id", "completed",
-    "duration_minutes", "notes", "activity_owner",
-]
-
-
 def to_dataframe(objects: list, columns: list) -> pd.DataFrame:
     """Convert a list of dataclass instances to a pandas DataFrame."""
     rows = [dataclasses.asdict(obj) for obj in objects]
+    # Only keep columns that exist in the data
+    if rows:
+        available = set(rows[0].keys())
+        columns = [c for c in columns if c in available]
     return pd.DataFrame(rows, columns=columns)
 
 
 def write_csv(objects: list, columns: list, path: str) -> None:
     """Write a list of dataclass instances to a CSV file."""
     with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=columns)
+        writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
         for obj in objects:
             writer.writerow(dataclasses.asdict(obj))
@@ -94,7 +77,7 @@ def build_zip(dataframes: dict) -> bytes:
 #  Generation pipeline                                                   #
 # ===================================================================== #
 
-def run_generation(num_accounts: int, date_years: int) -> dict:
+def run_generation(num_accounts: int, date_years: int, profile) -> dict:
     """
     Run the full generation pipeline: accounts -> contacts -> deals -> activities.
 
@@ -104,6 +87,7 @@ def run_generation(num_accounts: int, date_years: int) -> dict:
     Args:
         num_accounts: Number of accounts to generate.
         date_years: Years of history (1, 2, or 3).
+        profile: A BaseProfile instance.
 
     Returns:
         Dict with keys 'accounts', 'contacts', 'deals', 'activities',
@@ -134,9 +118,9 @@ def run_generation(num_accounts: int, date_years: int) -> dict:
     progress = st.progress(0, text="Generating accounts...")
 
     # --- Step 1: Accounts ---
-    acc_gen = AccountGenerator()
+    acc_gen = AccountGenerator(profile=profile)
     accounts = acc_gen.generate(num_accounts)
-    accounts_df = to_dataframe(accounts, ACCOUNT_FIELDS)
+    accounts_df = to_dataframe(accounts, profile.account_fields)
     progress.progress(25, text="Generating contacts...")
 
     # --- Write accounts to temp CSV for downstream generators ---
@@ -144,36 +128,36 @@ def run_generation(num_accounts: int, date_years: int) -> dict:
         mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8"
     ) as tmp_acc:
         tmp_acc_path = tmp_acc.name
-        write_csv(accounts, ACCOUNT_FIELDS, tmp_acc_path)
+        write_csv(accounts, profile.account_fields, tmp_acc_path)
 
     # --- Step 2: Contacts ---
-    con_gen = ContactGenerator(tmp_acc_path)
+    con_gen = ContactGenerator(tmp_acc_path, profile=profile)
     contacts = con_gen.generate()
-    contacts_df = to_dataframe(contacts, CONTACT_FIELDS)
+    contacts_df = to_dataframe(contacts, profile.contact_fields)
     progress.progress(50, text="Generating deals...")
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8"
     ) as tmp_con:
         tmp_con_path = tmp_con.name
-        write_csv(contacts, CONTACT_FIELDS, tmp_con_path)
+        write_csv(contacts, profile.contact_fields, tmp_con_path)
 
     # --- Step 3: Deals ---
-    deal_gen = DealGenerator(tmp_acc_path, tmp_con_path)
+    deal_gen = DealGenerator(tmp_acc_path, tmp_con_path, profile=profile)
     deals = deal_gen.generate()
-    deals_df = to_dataframe(deals, DEAL_FIELDS)
+    deals_df = to_dataframe(deals, profile.deal_fields)
     progress.progress(75, text="Generating activities...")
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8"
     ) as tmp_deal:
         tmp_deal_path = tmp_deal.name
-        write_csv(deals, DEAL_FIELDS, tmp_deal_path)
+        write_csv(deals, profile.deal_fields, tmp_deal_path)
 
     # --- Step 4: Activities ---
-    act_gen = ActivityGenerator(tmp_acc_path, tmp_con_path, tmp_deal_path)
+    act_gen = ActivityGenerator(tmp_acc_path, tmp_con_path, tmp_deal_path, profile=profile)
     activities = act_gen.generate()
-    activities_df = to_dataframe(activities, ACTIVITY_FIELDS)
+    activities_df = to_dataframe(activities, profile.activity_fields)
     progress.progress(100, text="Done!")
 
     # --- Clean up temp files ---
@@ -208,7 +192,7 @@ def main():
     st.title("CRM Dataset Builder")
     st.caption("by Juanita Ossa")
     st.markdown(
-        "Generate realistic, relational B2B SaaS CRM datasets "
+        "Generate realistic, relational CRM datasets "
         "for testing, demos, and development."
     )
 
@@ -218,19 +202,30 @@ def main():
     with st.sidebar:
         st.header("Configuration")
 
+        # Business type selector
+        business_type = st.selectbox(
+            "Business Type",
+            options=list(PROFILE_REGISTRY.keys()),
+        )
+        profile = PROFILE_REGISTRY[business_type]()
+        st.caption(profile.description)
+
         num_accounts = st.slider(
             "Number of accounts",
             min_value=25,
             max_value=500,
             value=50,
             step=25,
-            help="How many B2B SaaS companies to generate.",
+            help="How many companies to generate.",
         )
 
+        # Dynamic pipeline checkboxes from profile
         st.subheader("Pipelines")
-        show_nb = st.checkbox("New Business", value=True)
-        show_renewal = st.checkbox("Renewals", value=True)
-        show_expansion = st.checkbox("Expansions", value=True)
+        pipeline_selections = {}
+        for pipeline_name in profile.pipelines.keys():
+            pipeline_selections[pipeline_name] = st.checkbox(
+                pipeline_name, value=True
+            )
 
         date_years = st.radio(
             "Date range (years of history)",
@@ -258,8 +253,9 @@ def main():
     #  Generation trigger                                                 #
     # ------------------------------------------------------------------ #
     if generate_clicked:
-        data = run_generation(num_accounts, date_years)
+        data = run_generation(num_accounts, date_years, profile)
         st.session_state["data"] = data
+        st.session_state["profile_name"] = business_type
 
     # ------------------------------------------------------------------ #
     #  Main area — display results if data exists                         #
@@ -277,13 +273,9 @@ def main():
         activities_df = data["activities"]
 
         # Build pipeline filter mask for deals and activities
-        selected_pipelines = []
-        if show_nb:
-            selected_pipelines.append("New Business")
-        if show_renewal:
-            selected_pipelines.append("Renewal")
-        if show_expansion:
-            selected_pipelines.append("Expansion")
+        selected_pipelines = [
+            name for name, checked in pipeline_selections.items() if checked
+        ]
 
         if selected_pipelines:
             filtered_deals = deals_df[deals_df["pipeline"].isin(selected_pipelines)]
@@ -344,8 +336,8 @@ def main():
 
         with stat_left:
             st.markdown("**Win rates by pipeline**")
-            for pipeline in ["New Business", "Renewal", "Expansion"]:
-                pipe_deals = deals_df[deals_df["pipeline"] == pipeline]
+            for pipeline_name in profile.pipelines.keys():
+                pipe_deals = deals_df[deals_df["pipeline"] == pipeline_name]
                 if len(pipe_deals) == 0:
                     continue
                 won = (pipe_deals["deal_status"] == "Won").sum()
@@ -353,14 +345,14 @@ def main():
                 active = (pipe_deals["deal_status"] == "Open").sum()
                 n = len(pipe_deals)
                 st.markdown(
-                    f"- **{pipeline}**: Won {won}/{n} ({won/n*100:.0f}%) · "
+                    f"- **{pipeline_name}**: Won {won}/{n} ({won/n*100:.0f}%) · "
                     f"Lost {lost}/{n} ({lost/n*100:.0f}%) · "
                     f"Open {active}/{n} ({active/n*100:.0f}%)"
                 )
 
         with stat_right:
             st.markdown("**Avg deal size by segment**")
-            for segment in ["SMB", "Mid-Market", "Enterprise"]:
+            for segment in profile.segments:
                 seg_deals = deals_df[deals_df["segment"] == segment]
                 if len(seg_deals) == 0:
                     continue
@@ -372,8 +364,8 @@ def main():
         act_type_counts = activities_df["activity_type"].value_counts()
         act_total = len(activities_df)
 
-        act_cols = st.columns(5)
-        for i, atype in enumerate(["Email", "Phone Call", "Meeting", "LinkedIn", "Note"]):
+        act_cols = st.columns(len(profile.activity_types))
+        for i, atype in enumerate(profile.activity_types):
             cnt = act_type_counts.get(atype, 0)
             pct = cnt / act_total * 100 if act_total else 0
             act_cols[i].metric(atype, f"{cnt}", f"{pct:.0f}%")
@@ -433,7 +425,8 @@ def main():
             }
             ExporterClass = exporter_map[export_format]
             exporter = ExporterClass(
-                accounts_df, contacts_df, filtered_deals, filtered_activities
+                accounts_df, contacts_df, filtered_deals, filtered_activities,
+                profile=profile,
             )
             crm_files = exporter.export()
 
@@ -476,23 +469,27 @@ def main():
     st.divider()
     with st.expander("About this tool"):
         st.markdown("""
-**CRM Dataset Builder** generates realistic, interconnected B2B SaaS CRM
-datasets for testing, demos, and development.
+**CRM Dataset Builder** generates realistic, interconnected CRM datasets
+for testing, demos, and development.
+
+**Business types:** B2B SaaS, Manufacturer, and Consultancy — each with
+industry-specific companies, pipelines, deal sizes, and activity patterns.
 
 **Data relationships:**
 
 ```
 accounts
   ├── contacts        (2-5 per account)
-  ├── deals           (New Business → Renewals → Expansions)
+  ├── deals           (Primary → Renewals → Expansions)
   │    └── activities (phase-based: LinkedIn early, Meetings mid, Emails late)
   └── activities      (non-deal relationship touchpoints)
 ```
 
 **How it works:**
+- Select a business type to get industry-specific data (names, pipelines, deal sizes)
 - Accounts are generated with realistic company names, industries, and revenue
 - Contacts are linked to accounts with department-weighted titles
-- Deals follow three pipelines with segment-based ACV and realistic win rates
+- Deals follow profile-specific pipelines with segment-based pricing and win rates
 - Activities shift across the deal lifecycle with phase-based type weighting
 - Data is generated fresh each time — nothing is stored on the server
 

@@ -24,6 +24,9 @@ class HubSpotExporter(BaseCRMExporter):
     Owner identifiers use email format: sarah.chen@testcompany.com
     """
 
+    def __init__(self, accounts_df, contacts_df, deals_df, activities_df, profile=None):
+        super().__init__(accounts_df, contacts_df, deals_df, activities_df, profile=profile)
+
     def crm_name(self) -> str:
         return "HubSpot"
 
@@ -59,7 +62,7 @@ class HubSpotExporter(BaseCRMExporter):
         }
 
     def deal_field_mapping(self) -> Dict[str, str]:
-        return {
+        mapping = {
             "deal_name": "dealname",
             "pipeline": "pipeline",
             "stage": "dealstage",
@@ -69,6 +72,9 @@ class HubSpotExporter(BaseCRMExporter):
             "deal_status": "deal_status",
             "deal_owner": "hubspot_owner_id",
         }
+        if "subscription_type" in self.profile.deal_fields:
+            mapping["subscription_type"] = "subscription_type"
+        return mapping
 
     def activity_field_mapping(self) -> Dict[str, str]:
         return {

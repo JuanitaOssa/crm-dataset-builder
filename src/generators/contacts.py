@@ -1,8 +1,9 @@
 """
 Contact Generator Module
 
-Generates realistic B2B SaaS contact data for CRM datasets.
+Generates realistic contact data for CRM datasets.
 Each contact is linked to an existing account via account_id.
+Business-specific constants come from the profile.
 """
 
 import csv
@@ -16,7 +17,7 @@ from faker import Faker
 @dataclass
 class Contact:
     """
-    Represents a contact person at a B2B SaaS company.
+    Represents a contact person at a company.
 
     Attributes:
         contact_id: Unique identifier for the contact
@@ -42,7 +43,7 @@ class Contact:
 
 class ContactGenerator:
     """
-    Generates realistic B2B SaaS contact data linked to existing accounts.
+    Generates realistic contact data linked to existing accounts.
 
     Reads an accounts CSV file and generates multiple contacts per account
     with realistic names, emails, titles, and department assignments.
@@ -52,98 +53,14 @@ class ContactGenerator:
         contacts = generator.generate()
     """
 
-    # Department -> list of realistic titles
-    TITLE_BY_DEPARTMENT = {
-        "Sales": [
-            "Account Executive",
-            "Sales Manager",
-            "VP of Sales",
-            "Sales Development Representative",
-            "Director of Sales",
-            "Chief Revenue Officer",
-            "Regional Sales Manager",
-        ],
-        "Engineering": [
-            "Software Engineer",
-            "Engineering Manager",
-            "VP of Engineering",
-            "CTO",
-            "Senior Software Engineer",
-            "Principal Engineer",
-        ],
-        "Marketing": [
-            "Marketing Manager",
-            "VP of Marketing",
-            "CMO",
-            "Content Marketing Manager",
-            "Demand Generation Manager",
-            "Director of Marketing",
-        ],
-        "Operations": [
-            "Operations Manager",
-            "COO",
-            "Director of Operations",
-            "Business Operations Analyst",
-            "VP of Operations",
-        ],
-        "Customer Success": [
-            "Customer Success Manager",
-            "VP of Customer Success",
-            "Director of Customer Success",
-            "Customer Success Associate",
-            "Head of Customer Success",
-        ],
-        "Executive": [
-            "CEO",
-            "President",
-            "Co-Founder",
-            "Managing Director",
-        ],
-        "Finance": [
-            "CFO",
-            "Finance Manager",
-            "Controller",
-            "Director of Finance",
-            "Financial Analyst",
-        ],
-        "Product": [
-            "Product Manager",
-            "VP of Product",
-            "Chief Product Officer",
-            "Senior Product Manager",
-            "Director of Product",
-        ],
-    }
-
-    # Department weights — biased toward customer-facing roles for CRM realism
-    DEPARTMENT_WEIGHTS = {
-        "Sales": 25,
-        "Marketing": 15,
-        "Customer Success": 15,
-        "Engineering": 10,
-        "Product": 10,
-        "Operations": 10,
-        "Executive": 8,
-        "Finance": 7,
-    }
-
-    # Pool of CRM contact owners (sales reps)
-    CONTACT_OWNERS = [
-        "Sarah Chen",
-        "Marcus Johnson",
-        "Emily Rodriguez",
-        "David Kim",
-        "Rachel Thompson",
-        "James O'Brien",
-    ]
-
-    def __init__(self, accounts_csv_path: str, seed: int = None):
+    def __init__(self, accounts_csv_path: str, seed: int = None, profile=None):
         """
         Initialize the contact generator.
 
         Args:
             accounts_csv_path: Path to the accounts CSV file to read.
             seed: Optional random seed for reproducible data generation.
+            profile: A BaseProfile instance. Defaults to B2BSaaSProfile.
         """
         self.accounts_csv_path = accounts_csv_path
         self.faker = Faker()
@@ -152,31 +69,24 @@ class ContactGenerator:
             Faker.seed(seed)
             random.seed(seed)
 
+        if profile is None:
+            from profiles.b2b_saas import B2BSaaSProfile
+            profile = B2BSaaSProfile()
+        self.profile = profile
+
         self.accounts = self._load_accounts()
 
     def _load_accounts(self) -> List[dict]:
-        """
-        Load accounts from the CSV file.
-
-        Returns:
-            A list of dictionaries, one per account row.
-
-        Raises:
-            FileNotFoundError: If the accounts CSV file doesn't exist.
-            ValueError: If required columns are missing from the CSV.
-        """
+        """Load accounts from the CSV file."""
         try:
             with open(self.accounts_csv_path, "r", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
-
-                # Validate required columns exist
                 required_columns = {"id", "company_name", "website"}
                 if not required_columns.issubset(set(reader.fieldnames or [])):
                     missing = required_columns - set(reader.fieldnames or [])
                     raise ValueError(
                         f"Accounts CSV is missing required columns: {missing}"
                     )
-
                 return list(reader)
         except FileNotFoundError:
             raise FileNotFoundError(
@@ -185,17 +95,7 @@ class ContactGenerator:
             )
 
     def _extract_email_domain(self, website: str) -> str:
-        """
-        Extract an email-friendly domain from a website URL.
-
-        Strips the 'https://www.' prefix that the accounts generator adds.
-
-        Args:
-            website: The full website URL (e.g., 'https://www.cloudstack.io')
-
-        Returns:
-            The domain string (e.g., 'cloudstack.io')
-        """
+        """Extract an email-friendly domain from a website URL."""
         domain = website
         for prefix in ["https://www.", "http://www.", "https://", "http://"]:
             if domain.startswith(prefix):
@@ -204,77 +104,33 @@ class ContactGenerator:
         return domain
 
     def _generate_name(self) -> tuple:
-        """
-        Generate a realistic first and last name.
-
-        Returns:
-            A tuple of (first_name, last_name).
-        """
+        """Generate a realistic first and last name."""
         return self.faker.first_name(), self.faker.last_name()
 
     def _generate_email(self, first_name: str, last_name: str, domain: str) -> str:
-        """
-        Generate a work email in first.last@domain format.
-
-        Strips apostrophes and spaces from names for clean email addresses.
-
-        Args:
-            first_name: Contact's first name.
-            last_name: Contact's last name.
-            domain: The company's email domain.
-
-        Returns:
-            A formatted email address string.
-        """
+        """Generate a work email in first.last@domain format."""
         clean_first = first_name.lower().replace("'", "").replace(" ", "")
         clean_last = last_name.lower().replace("'", "").replace(" ", "")
         return f"{clean_first}.{clean_last}@{domain}"
 
     def _generate_phone(self) -> str:
-        """
-        Generate a US phone number.
-
-        Returns:
-            A formatted phone number string.
-        """
+        """Generate a US phone number."""
         return self.faker.phone_number()
 
     def _generate_title_and_department(self) -> tuple:
-        """
-        Pick a department (weighted) then a random title within it.
-
-        Departments are weighted toward Sales, Marketing, and Customer Success
-        to reflect realistic CRM contact distributions.
-
-        Returns:
-            A tuple of (title, department).
-        """
-        departments = list(self.DEPARTMENT_WEIGHTS.keys())
-        weights = list(self.DEPARTMENT_WEIGHTS.values())
+        """Pick a department (weighted) then a random title within it."""
+        departments = list(self.profile.department_weights.keys())
+        weights = list(self.profile.department_weights.values())
 
         department = random.choices(departments, weights=weights, k=1)[0]
-        title = random.choice(self.TITLE_BY_DEPARTMENT[department])
+        title = random.choice(self.profile.title_by_department[department])
 
         return title, department
 
     def _generate_contact_count(self) -> int:
-        """
-        Determine how many contacts to generate for a single account.
-
-        Weighted distribution:
-            2 contacts: 35%
-            3 contacts: 35%
-            4 contacts: 20%
-            5 contacts: 10%
-
-        Returns:
-            An integer contact count (2-5).
-        """
-        return random.choices(
-            [2, 3, 4, 5],
-            weights=[35, 35, 20, 10],
-            k=1,
-        )[0]
+        """Determine how many contacts to generate for a single account."""
+        counts, weights = self.profile.contacts_per_account_weights
+        return random.choices(counts, weights=weights, k=1)[0]
 
     def generate(self) -> List[Contact]:
         """
@@ -282,9 +138,6 @@ class ContactGenerator:
 
         Iterates over every account, creates a weighted-random number of
         contacts per account, and assigns globally sequential contact IDs.
-
-        Returns:
-            A list of Contact dataclass instances.
         """
         contacts = []
         contact_id = 1
@@ -299,7 +152,7 @@ class ContactGenerator:
                 email = self._generate_email(first_name, last_name, domain)
                 phone = self._generate_phone()
                 title, department = self._generate_title_and_department()
-                contact_owner = random.choice(self.CONTACT_OWNERS)
+                contact_owner = random.choice(self.profile.sales_reps)
 
                 contacts.append(Contact(
                     contact_id=contact_id,
