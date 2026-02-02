@@ -7,8 +7,8 @@ demonstrations, and development purposes.
 Usage:
     python src/main.py
 
-The tool presents a menu to generate accounts, contacts, deals, or all three.
-Output CSV files are saved to the output directory.
+The tool presents a menu to generate accounts, contacts, deals, activities,
+or all four. Output CSV files are saved to the output directory.
 """
 
 import csv
@@ -20,7 +20,7 @@ from collections import Counter
 # This allows running the script from the project root directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from generators import AccountGenerator, ContactGenerator, DealGenerator
+from generators import AccountGenerator, ContactGenerator, DealGenerator, ActivityGenerator
 
 
 # Path helpers
@@ -28,6 +28,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ACCOUNTS_PATH = os.path.join(PROJECT_ROOT, "output", "accounts.csv")
 CONTACTS_PATH = os.path.join(PROJECT_ROOT, "output", "contacts.csv")
 DEALS_PATH = os.path.join(PROJECT_ROOT, "output", "deals.csv")
+ACTIVITIES_PATH = os.path.join(PROJECT_ROOT, "output", "activities.csv")
 
 
 def display_menu() -> str:
@@ -35,19 +36,20 @@ def display_menu() -> str:
     Display the main menu and return the user's choice.
 
     Returns:
-        The selected option as a string ('1', '2', '3', or '4').
+        The selected option as a string ('1' through '5').
     """
     print("\nWhat would you like to generate?")
     print("  1) Accounts")
     print("  2) Contacts")
     print("  3) Deals")
-    print("  4) All (accounts + contacts + deals)")
+    print("  4) Activities")
+    print("  5) All (accounts + contacts + deals + activities)")
 
     while True:
-        choice = input("\nSelect an option [1/2/3/4]: ").strip()
-        if choice in ("1", "2", "3", "4"):
+        choice = input("\nSelect an option [1/2/3/4/5]: ").strip()
+        if choice in ("1", "2", "3", "4", "5"):
             return choice
-        print("Invalid choice. Please enter 1, 2, 3, or 4.")
+        print("Invalid choice. Please enter 1, 2, 3, 4, or 5.")
 
 
 def get_user_input() -> int:
@@ -306,12 +308,12 @@ def generate_deals_flow() -> None:
     """Run the deals generation workflow."""
     if not os.path.exists(ACCOUNTS_PATH):
         print("\n[!] accounts.csv not found at: " + ACCOUNTS_PATH)
-        print("    Please generate accounts first (option 1) or run all (option 4).")
+        print("    Please generate accounts first (option 1) or run all (option 5).")
         return
 
     if not os.path.exists(CONTACTS_PATH):
         print("\n[!] contacts.csv not found at: " + CONTACTS_PATH)
-        print("    Please generate contacts first (option 2) or run all (option 4).")
+        print("    Please generate contacts first (option 2) or run all (option 5).")
         return
 
     print(f"\nLoading accounts from: {ACCOUNTS_PATH}")
@@ -380,11 +382,165 @@ def generate_deals_flow() -> None:
         print()
 
 
+def save_activities_to_csv(activities: list, filepath: str) -> None:
+    """
+    Save generated activities to a CSV file.
+
+    Creates the output directory if it doesn't exist.
+
+    Args:
+        activities: List of Activity dataclass instances.
+        filepath: Path where the CSV file should be saved.
+    """
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+    fieldnames = [
+        "activity_id",
+        "activity_type",
+        "subject",
+        "activity_date",
+        "account_id",
+        "contact_id",
+        "deal_id",
+        "completed",
+        "duration_minutes",
+        "notes",
+        "activity_owner",
+    ]
+
+    with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for activity in activities:
+            writer.writerow({
+                "activity_id": activity.activity_id,
+                "activity_type": activity.activity_type,
+                "subject": activity.subject,
+                "activity_date": activity.activity_date,
+                "account_id": activity.account_id,
+                "contact_id": activity.contact_id,
+                "deal_id": activity.deal_id,
+                "completed": activity.completed,
+                "duration_minutes": activity.duration_minutes,
+                "notes": activity.notes,
+                "activity_owner": activity.activity_owner,
+            })
+
+
+def generate_activities_flow() -> None:
+    """Run the activities generation workflow."""
+    if not os.path.exists(ACCOUNTS_PATH):
+        print("\n[!] accounts.csv not found at: " + ACCOUNTS_PATH)
+        print("    Please generate accounts first (option 1) or run all (option 5).")
+        return
+
+    if not os.path.exists(CONTACTS_PATH):
+        print("\n[!] contacts.csv not found at: " + CONTACTS_PATH)
+        print("    Please generate contacts first (option 2) or run all (option 5).")
+        return
+
+    if not os.path.exists(DEALS_PATH):
+        print("\n[!] deals.csv not found at: " + DEALS_PATH)
+        print("    Please generate deals first (option 3) or run all (option 5).")
+        return
+
+    print(f"\nLoading accounts from: {ACCOUNTS_PATH}")
+    print(f"Loading contacts from: {CONTACTS_PATH}")
+    print(f"Loading deals from: {DEALS_PATH}")
+    generator = ActivityGenerator(ACCOUNTS_PATH, CONTACTS_PATH, DEALS_PATH)
+
+    total_deals = len(generator.deals)
+    total_accounts = len(generator.accounts)
+    print(f"Generating activities for {total_deals} deals across {total_accounts} accounts...")
+    activities = generator.generate()
+
+    save_activities_to_csv(activities, ACTIVITIES_PATH)
+
+    # --- Summary stats ---
+    total = len(activities)
+    type_counts = Counter(a.activity_type for a in activities)
+
+    # Separate deal-linked vs non-deal
+    deal_linked = [a for a in activities if a.deal_id]
+    non_deal = [a for a in activities if not a.deal_id]
+
+    # Build deal metadata lookups
+    deal_status_map = {d["deal_id"]: d["deal_status"] for d in generator.deals}
+    deal_segment_map = {d["deal_id"]: d["segment"] for d in generator.deals}
+
+    # Group deal-linked activities by deal to compute averages
+    activities_per_deal = Counter(a.deal_id for a in deal_linked)
+
+    won_counts = [
+        c for did, c in activities_per_deal.items()
+        if deal_status_map.get(did) == "Won"
+    ]
+    lost_counts = [
+        c for did, c in activities_per_deal.items()
+        if deal_status_map.get(did) == "Lost"
+    ]
+    active_counts = [
+        c for did, c in activities_per_deal.items()
+        if deal_status_map.get(did) == "Active"
+    ]
+
+    avg_won = sum(won_counts) / len(won_counts) if won_counts else 0
+    avg_lost = sum(lost_counts) / len(lost_counts) if lost_counts else 0
+    avg_active = sum(active_counts) / len(active_counts) if active_counts else 0
+
+    # Per-segment breakdown of deal-linked activities
+    segment_activity_counts = Counter()
+    for a in deal_linked:
+        seg = deal_segment_map.get(a.deal_id, "Unknown")
+        segment_activity_counts[seg] += 1
+
+    # Accounts with zero activities
+    accounts_with_activities = set(a.account_id for a in activities)
+    all_account_ids = set(int(a["id"]) for a in generator.accounts)
+    zero_activity_accounts = all_account_ids - accounts_with_activities
+
+    print("\n" + "-" * 50)
+    print("Success!")
+    print(f"  Generated {total} activities")
+    print(f"  Deal-linked: {len(deal_linked)} | Non-deal: {len(non_deal)}")
+    print(f"  Saved to: {ACTIVITIES_PATH}")
+    print("-" * 50)
+
+    print("\nActivity type breakdown:")
+    for atype in ["Email", "Phone Call", "Meeting", "LinkedIn", "Note"]:
+        cnt = type_counts.get(atype, 0)
+        pct = cnt / total * 100 if total else 0
+        print(f"  {atype}: {cnt} ({pct:.0f}%)")
+
+    print("\nAvg activities per deal by outcome:")
+    print(f"  Won deals:    {avg_won:.1f} avg ({len(won_counts)} deals)")
+    print(f"  Lost deals:   {avg_lost:.1f} avg ({len(lost_counts)} deals)")
+    print(f"  Active deals: {avg_active:.1f} avg ({len(active_counts)} deals)")
+
+    print("\nDeal-linked activities by segment:")
+    for seg in ["SMB", "Mid-Market", "Enterprise"]:
+        print(f"  {seg}: {segment_activity_counts.get(seg, 0)} activities")
+
+    print(f"\nAccounts with zero activities: {len(zero_activity_accounts)}")
+
+    # Preview first 3 activities
+    print("\nPreview of generated activities:")
+    print("-" * 50)
+    for activity in activities[:3]:
+        deal_info = f"Deal #{activity.deal_id}" if activity.deal_id else "No deal"
+        print(f"  - [{activity.activity_type}] {activity.subject}")
+        print(f"    {activity.activity_date} | Account #{activity.account_id} | {deal_info}")
+        print(f"    Owner: {activity.activity_owner} | Completed: {activity.completed}")
+        print()
+
+
 def generate_all_flow() -> None:
-    """Run accounts, contacts, then deals generation sequentially."""
+    """Run accounts, contacts, deals, then activities generation sequentially."""
     generate_accounts_flow()
     generate_contacts_flow()
     generate_deals_flow()
+    generate_activities_flow()
 
 
 def main():
@@ -408,6 +564,8 @@ def main():
     elif choice == "3":
         generate_deals_flow()
     elif choice == "4":
+        generate_activities_flow()
+    elif choice == "5":
         generate_all_flow()
 
 
