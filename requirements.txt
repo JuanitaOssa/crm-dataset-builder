@@ -3,3 +3,9 @@
 # Faker - for generating realistic fake data
 # https://faker.readthedocs.io/
 faker>=20.0.0
+
+# Streamlit - web interface
+streamlit>=1.30.0
+
+# Pandas - data manipulation and CSV export
+pandas>=2.0.0
