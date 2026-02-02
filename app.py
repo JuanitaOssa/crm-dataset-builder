@@ -457,13 +457,6 @@ def main():
                 mime="application/zip",
             )
 
-            # Export file preview
-            with st.expander("Export File Preview"):
-                for filename, content in crm_files.items():
-                    if isinstance(content, pd.DataFrame):
-                        st.markdown(f"**{filename}** ({len(content)} rows)")
-                        st.dataframe(content.head(5), use_container_width=True, hide_index=True)
-
             # Import guide
             guide_key = [k for k in crm_files if k.endswith(".md")]
             if guide_key:
