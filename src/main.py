@@ -21,6 +21,7 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from generators import AccountGenerator, ContactGenerator, DealGenerator, ActivityGenerator
+from exporters import HubSpotExporter, SalesforceExporter, ZohoExporter
 
 
 # Path helpers
@@ -36,7 +37,7 @@ def display_menu() -> str:
     Display the main menu and return the user's choice.
 
     Returns:
-        The selected option as a string ('1' through '5').
+        The selected option as a string ('1' through '6').
     """
     print("\nWhat would you like to generate?")
     print("  1) Accounts")
@@ -44,12 +45,13 @@ def display_menu() -> str:
     print("  3) Deals")
     print("  4) Activities")
     print("  5) All (accounts + contacts + deals + activities)")
+    print("  6) Export for CRM (HubSpot, Salesforce, Zoho)")
 
     while True:
-        choice = input("\nSelect an option [1/2/3/4/5]: ").strip()
-        if choice in ("1", "2", "3", "4", "5"):
+        choice = input("\nSelect an option [1/2/3/4/5/6]: ").strip()
+        if choice in ("1", "2", "3", "4", "5", "6"):
             return choice
-        print("Invalid choice. Please enter 1, 2, 3, 4, or 5.")
+        print("Invalid choice. Please enter 1, 2, 3, 4, 5, or 6.")
 
 
 def get_user_input() -> int:
@@ -109,10 +111,15 @@ def save_to_csv(accounts: list, filepath: str) -> None:
         "industry",
         "employee_count",
         "annual_revenue",
+        "street_address",
+        "city",
+        "state",
+        "zip_code",
+        "country",
         "region",
         "founded_year",
         "website",
-        "description"
+        "description",
     ]
 
     # Write the CSV file
@@ -130,10 +137,15 @@ def save_to_csv(accounts: list, filepath: str) -> None:
                 "industry": account.industry,
                 "employee_count": account.employee_count,
                 "annual_revenue": account.annual_revenue,
+                "street_address": account.street_address,
+                "city": account.city,
+                "state": account.state,
+                "zip_code": account.zip_code,
+                "country": account.country,
                 "region": account.region,
                 "founded_year": account.founded_year,
                 "website": account.website,
-                "description": account.description
+                "description": account.description,
             })
 
 
@@ -277,7 +289,6 @@ def save_deals_to_csv(deals: list, filepath: str) -> None:
         "close_date",
         "deal_status",
         "deal_owner",
-        "probability",
         "loss_reason",
     ]
 
@@ -299,7 +310,6 @@ def save_deals_to_csv(deals: list, filepath: str) -> None:
                 "close_date": deal.close_date,
                 "deal_status": deal.deal_status,
                 "deal_owner": deal.deal_owner,
-                "probability": deal.probability,
                 "loss_reason": deal.loss_reason,
             })
 
@@ -357,12 +367,12 @@ def generate_deals_flow() -> None:
             continue
         won = sum(1 for d in pipe_deals if d.deal_status == "Won")
         lost = sum(1 for d in pipe_deals if d.deal_status == "Lost")
-        active = sum(1 for d in pipe_deals if d.deal_status == "Active")
+        open_deals = sum(1 for d in pipe_deals if d.deal_status == "Open")
         n = len(pipe_deals)
         print(
             f"  {pipeline}: Won {won}/{n} ({won/n*100:.0f}%) | "
             f"Lost {lost}/{n} ({lost/n*100:.0f}%) | "
-            f"Active {active}/{n} ({active/n*100:.0f}%)"
+            f"Open {open_deals}/{n} ({open_deals/n*100:.0f}%)"
         )
 
     print("\nAverage deal size by segment:")
@@ -482,7 +492,7 @@ def generate_activities_flow() -> None:
     ]
     active_counts = [
         c for did, c in activities_per_deal.items()
-        if deal_status_map.get(did) == "Active"
+        if deal_status_map.get(did) == "Open"
     ]
 
     avg_won = sum(won_counts) / len(won_counts) if won_counts else 0
@@ -516,7 +526,7 @@ def generate_activities_flow() -> None:
     print("\nAvg activities per deal by outcome:")
     print(f"  Won deals:    {avg_won:.1f} avg ({len(won_counts)} deals)")
     print(f"  Lost deals:   {avg_lost:.1f} avg ({len(lost_counts)} deals)")
-    print(f"  Active deals: {avg_active:.1f} avg ({len(active_counts)} deals)")
+    print(f"  Open deals:   {avg_active:.1f} avg ({len(active_counts)} deals)")
 
     print("\nDeal-linked activities by segment:")
     for seg in ["SMB", "Mid-Market", "Enterprise"]:
@@ -543,6 +553,71 @@ def generate_all_flow() -> None:
     generate_activities_flow()
 
 
+def generate_crm_export_flow() -> None:
+    """Run the CRM export workflow using existing generated CSVs."""
+    import pandas as pd
+
+    for path, label in [
+        (ACCOUNTS_PATH, "accounts.csv"),
+        (CONTACTS_PATH, "contacts.csv"),
+        (DEALS_PATH, "deals.csv"),
+        (ACTIVITIES_PATH, "activities.csv"),
+    ]:
+        if not os.path.exists(path):
+            print(f"\n[!] {label} not found at: {path}")
+            print("    Please generate all data first (option 5).")
+            return
+
+    print("\nWhich CRM format?")
+    print("  1) HubSpot")
+    print("  2) Salesforce")
+    print("  3) Zoho")
+
+    while True:
+        crm_choice = input("\nSelect CRM [1/2/3]: ").strip()
+        if crm_choice in ("1", "2", "3"):
+            break
+        print("Invalid choice. Please enter 1, 2, or 3.")
+
+    exporter_map = {
+        "1": ("HubSpot", HubSpotExporter),
+        "2": ("Salesforce", SalesforceExporter),
+        "3": ("Zoho", ZohoExporter),
+    }
+    crm_name, ExporterClass = exporter_map[crm_choice]
+
+    accounts_df = pd.read_csv(ACCOUNTS_PATH)
+    contacts_df = pd.read_csv(CONTACTS_PATH)
+    deals_df = pd.read_csv(DEALS_PATH)
+    activities_df = pd.read_csv(ACTIVITIES_PATH)
+
+    print(f"\nExporting for {crm_name}...")
+    exporter = ExporterClass(accounts_df, contacts_df, deals_df, activities_df)
+    files = exporter.export()
+
+    # Save to output/{crm_name}/ directory
+    output_dir = os.path.join(PROJECT_ROOT, "output", crm_name.lower())
+    os.makedirs(output_dir, exist_ok=True)
+
+    for filename, content in files.items():
+        filepath = os.path.join(output_dir, filename)
+        if isinstance(content, pd.DataFrame):
+            content.to_csv(filepath, index=False)
+        else:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(content)
+
+    print("\n" + "-" * 50)
+    print("Success!")
+    print(f"  Exported {len(files)} files for {crm_name}")
+    print(f"  Saved to: {output_dir}/")
+    print("-" * 50)
+
+    print("\nGenerated files:")
+    for filename in sorted(files.keys()):
+        print(f"  - {filename}")
+
+
 def main():
     """
     Main entry point for the CRM Dataset Builder.
@@ -567,6 +642,8 @@ def main():
         generate_activities_flow()
     elif choice == "5":
         generate_all_flow()
+    elif choice == "6":
+        generate_crm_export_flow()
 
 
 if __name__ == "__main__":

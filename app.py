@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src
 from generators import AccountGenerator, ContactGenerator
 from generators.deals import DealGenerator, Deal
 from generators.activities import ActivityGenerator, Activity
+from exporters import HubSpotExporter, SalesforceExporter, ZohoExporter
 
 
 # ===================================================================== #
@@ -39,7 +40,8 @@ from generators.activities import ActivityGenerator, Activity
 # Column orders matching the dataclass fields (used for CSV and display)
 ACCOUNT_FIELDS = [
     "id", "company_name", "industry", "employee_count",
-    "annual_revenue", "region", "founded_year", "website", "description",
+    "annual_revenue", "street_address", "city", "state", "zip_code",
+    "country", "region", "founded_year", "website", "description",
 ]
 CONTACT_FIELDS = [
     "contact_id", "first_name", "last_name", "email", "phone",
@@ -48,7 +50,7 @@ CONTACT_FIELDS = [
 DEAL_FIELDS = [
     "deal_id", "deal_name", "account_id", "contact_id", "pipeline",
     "segment", "stage", "amount", "created_date", "close_date",
-    "deal_status", "deal_owner", "probability", "loss_reason",
+    "deal_status", "deal_owner", "loss_reason",
 ]
 ACTIVITY_FIELDS = [
     "activity_id", "activity_type", "subject", "activity_date",
@@ -238,6 +240,13 @@ def main():
             help="How many years of deal and activity history to generate.",
         )
 
+        st.subheader("Export Format")
+        export_format = st.selectbox(
+            "Target CRM",
+            options=["Standard CSV", "HubSpot", "Salesforce", "Zoho"],
+            help="Choose a CRM to get formatted import files with field mappings and association files.",
+        )
+
         st.divider()
         generate_clicked = st.button(
             "Generate Dataset",
@@ -341,12 +350,12 @@ def main():
                     continue
                 won = (pipe_deals["deal_status"] == "Won").sum()
                 lost = (pipe_deals["deal_status"] == "Lost").sum()
-                active = (pipe_deals["deal_status"] == "Active").sum()
+                active = (pipe_deals["deal_status"] == "Open").sum()
                 n = len(pipe_deals)
                 st.markdown(
                     f"- **{pipeline}**: Won {won}/{n} ({won/n*100:.0f}%) · "
                     f"Lost {lost}/{n} ({lost/n*100:.0f}%) · "
-                    f"Active {active}/{n} ({active/n*100:.0f}%)"
+                    f"Open {active}/{n} ({active/n*100:.0f}%)"
                 )
 
         with stat_right:
@@ -374,46 +383,92 @@ def main():
         # -------------------------------------------------------------- #
         st.subheader("Download")
 
-        dl_cols = st.columns(5)
+        if export_format == "Standard CSV":
+            dl_cols = st.columns(5)
 
-        dl_cols[0].download_button(
-            label="Accounts CSV",
-            data=accounts_df.to_csv(index=False),
-            file_name="accounts.csv",
-            mime="text/csv",
-        )
-        dl_cols[1].download_button(
-            label="Contacts CSV",
-            data=contacts_df.to_csv(index=False),
-            file_name="contacts.csv",
-            mime="text/csv",
-        )
-        dl_cols[2].download_button(
-            label="Deals CSV",
-            data=filtered_deals.to_csv(index=False),
-            file_name="deals.csv",
-            mime="text/csv",
-        )
-        dl_cols[3].download_button(
-            label="Activities CSV",
-            data=filtered_activities.to_csv(index=False),
-            file_name="activities.csv",
-            mime="text/csv",
-        )
+            dl_cols[0].download_button(
+                label="Accounts CSV",
+                data=accounts_df.to_csv(index=False),
+                file_name="accounts.csv",
+                mime="text/csv",
+            )
+            dl_cols[1].download_button(
+                label="Contacts CSV",
+                data=contacts_df.to_csv(index=False),
+                file_name="contacts.csv",
+                mime="text/csv",
+            )
+            dl_cols[2].download_button(
+                label="Deals CSV",
+                data=filtered_deals.to_csv(index=False),
+                file_name="deals.csv",
+                mime="text/csv",
+            )
+            dl_cols[3].download_button(
+                label="Activities CSV",
+                data=filtered_activities.to_csv(index=False),
+                file_name="activities.csv",
+                mime="text/csv",
+            )
 
-        # ZIP download with all four CSVs
-        zip_data = build_zip({
-            "accounts.csv": accounts_df,
-            "contacts.csv": contacts_df,
-            "deals.csv": filtered_deals,
-            "activities.csv": filtered_activities,
-        })
-        dl_cols[4].download_button(
-            label="All as ZIP",
-            data=zip_data,
-            file_name="crm_dataset.zip",
-            mime="application/zip",
-        )
+            # ZIP download with all four CSVs
+            zip_data = build_zip({
+                "accounts.csv": accounts_df,
+                "contacts.csv": contacts_df,
+                "deals.csv": filtered_deals,
+                "activities.csv": filtered_activities,
+            })
+            dl_cols[4].download_button(
+                label="All as ZIP",
+                data=zip_data,
+                file_name="crm_dataset.zip",
+                mime="application/zip",
+            )
+        else:
+            # CRM-specific export
+            exporter_map = {
+                "HubSpot": HubSpotExporter,
+                "Salesforce": SalesforceExporter,
+                "Zoho": ZohoExporter,
+            }
+            ExporterClass = exporter_map[export_format]
+            exporter = ExporterClass(
+                accounts_df, contacts_df, filtered_deals, filtered_activities
+            )
+            crm_files = exporter.export()
+
+            st.info(
+                f"**{export_format} format selected.** "
+                "Create users/owners in your CRM before importing data."
+            )
+
+            # Individual file downloads
+            csv_files = {k: v for k, v in crm_files.items() if k.endswith(".csv")}
+            cols = st.columns(min(len(csv_files), 4))
+            for i, (filename, df) in enumerate(csv_files.items()):
+                col_idx = i % min(len(csv_files), 4)
+                cols[col_idx].download_button(
+                    label=filename,
+                    data=df.to_csv(index=False),
+                    file_name=filename,
+                    mime="text/csv",
+                    key=f"crm_dl_{filename}",
+                )
+
+            # ZIP download with all CRM files
+            crm_zip = exporter.export_zip()
+            st.download_button(
+                label=f"Download all {export_format} files as ZIP",
+                data=crm_zip,
+                file_name=f"{export_format.lower()}_import.zip",
+                mime="application/zip",
+            )
+
+            # Import guide
+            guide_key = [k for k in crm_files if k.endswith(".md")]
+            if guide_key:
+                with st.expander("Import Guide"):
+                    st.markdown(crm_files[guide_key[0]])
 
     # ------------------------------------------------------------------ #
     #  About section                                                      #

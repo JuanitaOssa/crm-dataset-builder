@@ -525,7 +525,7 @@ class ActivityGenerator:
                 # For Active deals: force the first 2 activities to be
                 # within the last 2 weeks so the deal looks "current".
                 # Use max() so we never pick a date before the deal opened.
-                if status == "Active" and i < 2:
+                if status == "Open" and i < 2:
                     recent_start = max(self.RECENT_ACTIVITY_CUTOFF, created)
                     act_date = self._random_date(
                         recent_start, self.DATE_RANGE_END

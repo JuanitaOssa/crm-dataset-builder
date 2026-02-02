@@ -11,7 +11,7 @@ import csv
 import datetime
 import random
 from dataclasses import dataclass
-from typing import Callable, Dict, List
+from typing import Dict, List
 
 
 @dataclass
@@ -21,19 +21,18 @@ class Deal:
 
     Attributes:
         deal_id: Unique sequential identifier
-        deal_name: Human-readable name (CompanyName - Pipeline - N)
+        deal_name: Human-readable name ({CompanyName} YYMM, e.g. "QuantumSense 2501")
         account_id: Foreign key to accounts CSV
         contact_id: Foreign key to contacts CSV
         pipeline: New Business, Renewal, or Expansion
         segment: SMB, Mid-Market, or Enterprise
-        stage: Current pipeline stage
+        stage: Current pipeline stage (real stage, not "Active")
         amount: Deal value in USD
         created_date: When the deal was created (YYYY-MM-DD)
-        close_date: When the deal closed (YYYY-MM-DD), empty for Active
-        deal_status: Won, Lost, or Active
+        close_date: When the deal closed (YYYY-MM-DD), empty for Open deals
+        deal_status: Won, Lost, or Open (derived from stage)
         deal_owner: Sales rep who owns the deal
-        probability: Win probability percentage based on stage
-        loss_reason: Reason for loss, empty for Won/Active deals
+        loss_reason: Reason for loss, empty for Won/Open deals
     """
 
     deal_id: int
@@ -48,7 +47,6 @@ class Deal:
     close_date: str
     deal_status: str
     deal_owner: str
-    probability: int
     loss_reason: str
 
 
@@ -60,7 +58,7 @@ class DealGenerator:
     Uses a three-phase algorithm:
       1. New Business deals for ~70% of accounts
       2. Renewals and Expansions spawned from won NB deals
-      3. Sort all deals by date and assign sequential IDs
+      3. Sort all deals by date, assign sequential IDs and YYMM names
 
     Example:
         generator = DealGenerator("output/accounts.csv", "output/contacts.csv")
@@ -119,11 +117,11 @@ class DealGenerator:
         ],
     }
 
-    # --- Outcome weights: Won / Lost / Active ---
+    # --- Outcome weights: Won / Lost / Open ---
     OUTCOME_RATES = {
-        "New Business": {"Won": 22, "Lost": 58, "Active": 20},
-        "Renewal": {"Won": 85, "Lost": 10, "Active": 5},
-        "Expansion": {"Won": 45, "Lost": 30, "Active": 25},
+        "New Business": {"Won": 22, "Lost": 58, "Open": 20},
+        "Renewal": {"Won": 85, "Lost": 10, "Open": 5},
+        "Expansion": {"Won": 45, "Lost": 30, "Open": 25},
     }
 
     # --- Sales cycle lengths (days) ---
@@ -156,33 +154,27 @@ class DealGenerator:
         "Champion Left": 5,
     }
 
-    # --- Stage -> probability % per pipeline ---
-    STAGE_PROBABILITIES = {
+    # --- Weighted stage selection for open deals (middle stages favored) ---
+    ACTIVE_STAGE_WEIGHTS = {
         "New Business": {
-            "Lead": 5,
-            "Qualified": 10,
-            "Discovery": 20,
-            "Demo/Evaluation": 35,
-            "Proposal": 50,
-            "Negotiation": 70,
-            "Closed Won": 100,
-            "Closed Lost": 0,
+            "Lead": 10,
+            "Qualified": 15,
+            "Discovery": 25,
+            "Demo/Evaluation": 25,
+            "Proposal": 15,
+            "Negotiation": 10,
         },
         "Renewal": {
-            "Upcoming Renewal": 70,
-            "Customer Review": 80,
-            "Renewal Proposal": 85,
-            "Negotiation": 90,
-            "Closed Won": 100,
-            "Closed Lost": 0,
+            "Upcoming Renewal": 20,
+            "Customer Review": 30,
+            "Renewal Proposal": 30,
+            "Negotiation": 20,
         },
         "Expansion": {
             "Expansion Identified": 15,
             "Needs Analysis": 30,
-            "Proposal": 50,
-            "Negotiation": 65,
-            "Closed Won": 100,
-            "Closed Lost": 0,
+            "Proposal": 30,
+            "Negotiation": 25,
         },
     }
 
@@ -248,6 +240,15 @@ class DealGenerator:
             return "Mid-Market"
         return "Enterprise"
 
+    @staticmethod
+    def _derive_status(stage: str) -> str:
+        """Derive deal_status from the stage name."""
+        if stage == "Closed Won":
+            return "Won"
+        elif stage == "Closed Lost":
+            return "Lost"
+        return "Open"
+
     def _pick_outcome(self, pipeline: str) -> str:
         rates = self.OUTCOME_RATES[pipeline]
         return random.choices(
@@ -265,12 +266,11 @@ class DealGenerator:
         )[0]
 
     def _pick_active_stage(self, pipeline: str) -> str:
-        non_terminal = [
-            s
-            for s in self.STAGES[pipeline]
-            if s not in ("Closed Won", "Closed Lost")
-        ]
-        return random.choice(non_terminal)
+        """Pick an open-deal stage using weighted probabilities (middle stages favored)."""
+        weights = self.ACTIVE_STAGE_WEIGHTS[pipeline]
+        return random.choices(
+            list(weights.keys()), weights=list(weights.values()), k=1
+        )[0]
 
     # ------------------------------------------------------------------ #
     #  Amount generation                                                  #
@@ -312,16 +312,6 @@ class DealGenerator:
         return random.randint(lo, hi)
 
     # ------------------------------------------------------------------ #
-    #  Deal-name helper                                                   #
-    # ------------------------------------------------------------------ #
-
-    @staticmethod
-    def _generate_deal_name(
-        company_name: str, pipeline: str, seq: int
-    ) -> str:
-        return f"{company_name} - {pipeline} - {seq}"
-
-    # ------------------------------------------------------------------ #
     #  Account / deal-count selection                                     #
     # ------------------------------------------------------------------ #
 
@@ -342,15 +332,12 @@ class DealGenerator:
         self,
         deals: List[Deal],
         aid: int,
-        company: str,
         segment: str,
         pipeline: str,
         created: datetime.date,
         original_amount: int,
-        next_seq: Callable[[int], int],
     ) -> None:
         """Generate a single Renewal or Expansion deal and append it."""
-        seq = next_seq(aid)
         contact = random.choice(self.contacts_by_account[aid])
         cid = int(contact["contact_id"])
         owner = random.choice(self.DEAL_OWNERS)
@@ -358,19 +345,19 @@ class DealGenerator:
 
         outcome = self._pick_outcome(pipeline)
 
-        # Active-window enforcement: old deals can't stay Active
-        if outcome == "Active" and created < self.ACTIVE_WINDOW_START:
+        # Active-window enforcement: old deals can't stay Open
+        if outcome == "Open" and created < self.ACTIVE_WINDOW_START:
             outcome = random.choices(
                 ["Won", "Lost"],
                 weights=[85, 15] if pipeline == "Renewal" else [60, 40],
                 k=1,
             )[0]
 
-        if outcome == "Active":
+        if outcome == "Open":
             stage = self._pick_active_stage(pipeline)
             deals.append(Deal(
                 deal_id=0,
-                deal_name=self._generate_deal_name(company, pipeline, seq),
+                deal_name="",  # assigned in Phase 3
                 account_id=aid,
                 contact_id=cid,
                 pipeline=pipeline,
@@ -379,9 +366,8 @@ class DealGenerator:
                 amount=amount,
                 created_date=created.isoformat(),
                 close_date="",
-                deal_status="Active",
+                deal_status=self._derive_status(stage),
                 deal_owner=owner,
-                probability=self.STAGE_PROBABILITIES[pipeline][stage],
                 loss_reason="",
             ))
             return
@@ -391,11 +377,11 @@ class DealGenerator:
         close = created + datetime.timedelta(days=cycle)
 
         if close > self.DATE_RANGE_END:
-            # Close-date overflow -> convert to Active
+            # Close-date overflow -> convert to Open
             stage = self._pick_active_stage(pipeline)
             deals.append(Deal(
                 deal_id=0,
-                deal_name=self._generate_deal_name(company, pipeline, seq),
+                deal_name="",
                 account_id=aid,
                 contact_id=cid,
                 pipeline=pipeline,
@@ -404,21 +390,22 @@ class DealGenerator:
                 amount=amount,
                 created_date=created.isoformat(),
                 close_date="",
-                deal_status="Active",
+                deal_status=self._derive_status(stage),
                 deal_owner=owner,
-                probability=self.STAGE_PROBABILITIES[pipeline][stage],
                 loss_reason="",
             ))
             return
 
         if outcome == "Won":
-            stage, prob, reason = "Closed Won", 100, ""
+            stage = "Closed Won"
+            reason = ""
         else:
-            stage, prob, reason = "Closed Lost", 0, self._pick_loss_reason(segment)
+            stage = "Closed Lost"
+            reason = self._pick_loss_reason(segment)
 
         deals.append(Deal(
             deal_id=0,
-            deal_name=self._generate_deal_name(company, pipeline, seq),
+            deal_name="",
             account_id=aid,
             contact_id=cid,
             pipeline=pipeline,
@@ -427,9 +414,8 @@ class DealGenerator:
             amount=amount,
             created_date=created.isoformat(),
             close_date=close.isoformat(),
-            deal_status=outcome,
+            deal_status=self._derive_status(stage),
             deal_owner=owner,
-            probability=prob,
             loss_reason=reason,
         ))
 
@@ -440,11 +426,6 @@ class DealGenerator:
     def generate(self) -> List[Deal]:
         deals: List[Deal] = []
         won_nb: Dict[int, list] = {}   # account_id -> [{close_date, amount}]
-        seq_counter: Dict[int, int] = {}
-
-        def next_seq(account_id: int) -> int:
-            seq_counter[account_id] = seq_counter.get(account_id, 0) + 1
-            return seq_counter[account_id]
 
         selected = self._select_accounts_with_deals()
 
@@ -455,10 +436,8 @@ class DealGenerator:
                 continue
 
             segment = self.account_segments[aid]
-            company = self.account_names[aid]
 
             for _ in range(self._generate_nb_deal_count()):
-                seq = next_seq(aid)
                 contact = random.choice(self.contacts_by_account[aid])
                 cid = int(contact["contact_id"])
                 owner = random.choice(self.DEAL_OWNERS)
@@ -466,16 +445,14 @@ class DealGenerator:
 
                 outcome = self._pick_outcome("New Business")
 
-                if outcome == "Active":
+                if outcome == "Open":
                     created = self._random_date(
                         self.ACTIVE_WINDOW_START, self.DATE_RANGE_END
                     )
                     stage = self._pick_active_stage("New Business")
                     deals.append(Deal(
                         deal_id=0,
-                        deal_name=self._generate_deal_name(
-                            company, "New Business", seq
-                        ),
+                        deal_name="",
                         account_id=aid,
                         contact_id=cid,
                         pipeline="New Business",
@@ -484,11 +461,8 @@ class DealGenerator:
                         amount=amount,
                         created_date=created.isoformat(),
                         close_date="",
-                        deal_status="Active",
+                        deal_status=self._derive_status(stage),
                         deal_owner=owner,
-                        probability=self.STAGE_PROBABILITIES["New Business"][
-                            stage
-                        ],
                         loss_reason="",
                     ))
                     continue
@@ -500,16 +474,14 @@ class DealGenerator:
                 )
 
                 if latest_start <= self.DATE_RANGE_START:
-                    # Can't fit a full cycle — force Active
+                    # Can't fit a full cycle — force Open
                     created = self._random_date(
                         self.ACTIVE_WINDOW_START, self.DATE_RANGE_END
                     )
                     stage = self._pick_active_stage("New Business")
                     deals.append(Deal(
                         deal_id=0,
-                        deal_name=self._generate_deal_name(
-                            company, "New Business", seq
-                        ),
+                        deal_name="",
                         account_id=aid,
                         contact_id=cid,
                         pipeline="New Business",
@@ -518,11 +490,8 @@ class DealGenerator:
                         amount=amount,
                         created_date=created.isoformat(),
                         close_date="",
-                        deal_status="Active",
+                        deal_status=self._derive_status(stage),
                         deal_owner=owner,
-                        probability=self.STAGE_PROBABILITIES["New Business"][
-                            stage
-                        ],
                         loss_reason="",
                     ))
                     continue
@@ -531,22 +500,18 @@ class DealGenerator:
                 close = created + datetime.timedelta(days=cycle)
 
                 if outcome == "Won":
-                    stage, prob, reason = "Closed Won", 100, ""
+                    stage = "Closed Won"
+                    reason = ""
                     won_nb.setdefault(aid, []).append(
                         {"close_date": close, "amount": amount}
                     )
                 else:
-                    stage, prob, reason = (
-                        "Closed Lost",
-                        0,
-                        self._pick_loss_reason(segment),
-                    )
+                    stage = "Closed Lost"
+                    reason = self._pick_loss_reason(segment)
 
                 deals.append(Deal(
                     deal_id=0,
-                    deal_name=self._generate_deal_name(
-                        company, "New Business", seq
-                    ),
+                    deal_name="",
                     account_id=aid,
                     contact_id=cid,
                     pipeline="New Business",
@@ -555,16 +520,14 @@ class DealGenerator:
                     amount=amount,
                     created_date=created.isoformat(),
                     close_date=close.isoformat(),
-                    deal_status=outcome,
+                    deal_status=self._derive_status(stage),
                     deal_owner=owner,
-                    probability=prob,
                     loss_reason=reason,
                 ))
 
         # ---- Phase 2: Renewals + Expansions ----
         for aid, wins in won_nb.items():
             segment = self.account_segments[aid]
-            company = self.account_names[aid]
 
             for nb in wins:
                 nb_close = nb["close_date"]
@@ -576,8 +539,8 @@ class DealGenerator:
                 )
                 if r_created <= self.DATE_RANGE_END:
                     self._generate_followup_deal(
-                        deals, aid, company, segment, "Renewal",
-                        r_created, nb_amount, next_seq,
+                        deals, aid, segment, "Renewal",
+                        r_created, nb_amount,
                     )
 
                 # Expansion (50% chance, 3-9 months later)
@@ -587,13 +550,21 @@ class DealGenerator:
                     )
                     if e_created <= self.DATE_RANGE_END:
                         self._generate_followup_deal(
-                            deals, aid, company, segment, "Expansion",
-                            e_created, nb_amount, next_seq,
+                            deals, aid, segment, "Expansion",
+                            e_created, nb_amount,
                         )
 
-        # ---- Phase 3: Sort and assign sequential IDs ----
+        # ---- Phase 3: Sort, assign sequential IDs and YYMM names ----
         deals.sort(key=lambda d: (d.created_date, d.account_id))
+        name_tracker: Dict[str, int] = {}  # base_name -> count of occurrences
         for idx, deal in enumerate(deals, start=1):
             deal.deal_id = idx
+            # Build deal name: "{CompanyName} YYMM" with letter suffix for dups
+            company = self.account_names[deal.account_id]
+            yymm = deal.created_date[2:4] + deal.created_date[5:7]
+            base = f"{company} {yymm}"
+            count = name_tracker.get(base, 0)
+            deal.deal_name = base if count == 0 else base + chr(ord('a') + count - 1)
+            name_tracker[base] = count + 1
 
         return deals

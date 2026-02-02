@@ -23,7 +23,12 @@ class Account:
         industry: Industry/sector the company operates in
         employee_count: Number of employees
         annual_revenue: Annual revenue in USD
-        region: Geographic region (US-focused)
+        street_address: Street address
+        city: City name
+        state: US state (full name)
+        zip_code: ZIP code
+        country: Country (default: United States)
+        region: Geographic region derived from state
         founded_year: Year the company was founded
         website: Company website URL
         description: Brief company description
@@ -33,6 +38,11 @@ class Account:
     industry: str
     employee_count: int
     annual_revenue: int
+    street_address: str
+    city: str
+    state: str
+    zip_code: str
+    country: str
     region: str
     founded_year: int
     website: str
@@ -91,17 +101,28 @@ class AccountGenerator:
         "API & Integration Platform"
     ]
 
-    # US geographic regions
-    REGIONS = [
-        "West",
-        "East",
-        "Central",
-        "Southwest",
-        "Southeast",
-        "Northwest",
-        "Northeast",
-        "Midwest"
-    ]
+    # US state to region mapping (all 50 states + DC)
+    STATE_TO_REGION = {
+        "Alabama": "Southeast", "Alaska": "Northwest", "Arizona": "Southwest",
+        "Arkansas": "Southeast", "California": "West", "Colorado": "West",
+        "Connecticut": "Northeast", "Delaware": "East", "Florida": "Southeast",
+        "Georgia": "Southeast", "Hawaii": "West", "Idaho": "Northwest",
+        "Illinois": "Midwest", "Indiana": "Midwest", "Iowa": "Midwest",
+        "Kansas": "Central", "Kentucky": "Southeast", "Louisiana": "Southeast",
+        "Maine": "Northeast", "Maryland": "East", "Massachusetts": "Northeast",
+        "Michigan": "Midwest", "Minnesota": "Midwest", "Mississippi": "Southeast",
+        "Missouri": "Midwest", "Montana": "Northwest", "Nebraska": "Central",
+        "Nevada": "West", "New Hampshire": "Northeast", "New Jersey": "Northeast",
+        "New Mexico": "Southwest", "New York": "Northeast",
+        "North Carolina": "Southeast", "North Dakota": "Central",
+        "Ohio": "Midwest", "Oklahoma": "Southwest", "Oregon": "Northwest",
+        "Pennsylvania": "East", "Rhode Island": "Northeast",
+        "South Carolina": "Southeast", "South Dakota": "Central",
+        "Tennessee": "Southeast", "Texas": "Southwest", "Utah": "West",
+        "Vermont": "Northeast", "Virginia": "Southeast", "Washington": "Northwest",
+        "West Virginia": "East", "Wisconsin": "Midwest", "Wyoming": "Northwest",
+        "District of Columbia": "East",
+    }
 
     # Employee count tiers with weights (smaller companies more common)
     # Format: (min, max, weight)
@@ -263,6 +284,24 @@ class AccountGenerator:
 
         return random.choice(templates)
 
+    def _generate_address(self) -> dict:
+        """
+        Generate a realistic US address with state-derived region.
+
+        Returns:
+            Dict with keys: street_address, city, state, zip_code,
+            country, region.
+        """
+        state = random.choice(list(self.STATE_TO_REGION.keys()))
+        return {
+            "street_address": self.faker.street_address(),
+            "city": self.faker.city(),
+            "state": state,
+            "zip_code": self.faker.zipcode(),
+            "country": "United States",
+            "region": self.STATE_TO_REGION[state],
+        }
+
     def generate_one(self, id: int) -> Account:
         """
         Generate a single account with all attributes.
@@ -281,8 +320,8 @@ class AccountGenerator:
         # Generate dependent attributes
         annual_revenue = self._generate_annual_revenue(employee_count)
 
-        # Generate remaining attributes
-        region = random.choice(self.REGIONS)
+        # Generate address with region derived from state
+        address = self._generate_address()
         founded_year = random.randint(2010, 2024)
         website = self._generate_website(company_name)
         description = self._generate_description(industry)
@@ -293,10 +332,15 @@ class AccountGenerator:
             industry=industry,
             employee_count=employee_count,
             annual_revenue=annual_revenue,
-            region=region,
+            street_address=address["street_address"],
+            city=address["city"],
+            state=address["state"],
+            zip_code=address["zip_code"],
+            country=address["country"],
+            region=address["region"],
             founded_year=founded_year,
             website=website,
-            description=description
+            description=description,
         )
 
     def generate(self, count: int) -> List[Account]:
