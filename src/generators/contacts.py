@@ -9,7 +9,7 @@ Business-specific constants come from the profile.
 import csv
 import random
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List, Set
 
 from faker import Faker
 
@@ -74,6 +74,7 @@ class ContactGenerator:
             profile = B2BSaaSProfile()
         self.profile = profile
 
+        self._used_emails: Dict[str, Set[str]] = {}
         self.accounts = self._load_accounts()
 
     def _load_accounts(self) -> List[dict]:
@@ -108,14 +109,29 @@ class ContactGenerator:
         return self.faker.first_name(), self.faker.last_name()
 
     def _generate_email(self, first_name: str, last_name: str, domain: str) -> str:
-        """Generate a work email in first.last@domain format."""
+        """Generate a unique work email in first.last@domain format."""
         clean_first = first_name.lower().replace("'", "").replace(" ", "")
         clean_last = last_name.lower().replace("'", "").replace(" ", "")
-        return f"{clean_first}.{clean_last}@{domain}"
+        base_local = f"{clean_first}.{clean_last}"
+
+        if domain not in self._used_emails:
+            self._used_emails[domain] = set()
+
+        local = base_local
+        counter = 2
+        while local in self._used_emails[domain]:
+            local = f"{base_local}{counter}"
+            counter += 1
+
+        self._used_emails[domain].add(local)
+        return f"{local}@{domain}"
 
     def _generate_phone(self) -> str:
-        """Generate a US phone number."""
-        return self.faker.phone_number()
+        """Generate a US phone number in consistent (XXX) XXX-XXXX format."""
+        area = random.randint(200, 999)
+        prefix = random.randint(200, 999)
+        line = random.randint(1000, 9999)
+        return f"({area}) {prefix}-{line}"
 
     def _generate_title_and_department(self) -> tuple:
         """Pick a department (weighted) then a random title within it."""

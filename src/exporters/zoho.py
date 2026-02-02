@@ -169,12 +169,33 @@ class ZohoExporter(BaseCRMExporter):
     # ------------------------------------------------------------------ #
 
     def generate_import_guide(self) -> str:
-        return """# Zoho CRM Import Guide
+        profile = self.profile
+
+        # Build pipeline/stage section dynamically
+        pipeline_section = ""
+        for pipeline_name, stages in profile.pipelines.items():
+            active_stages = [s for s in stages if s not in ("Closed Won", "Closed Lost", "Churned")]
+            terminal = [s for s in stages if s in ("Closed Won", "Closed Lost", "Churned")]
+            stage_flow = " → ".join(active_stages)
+            if terminal:
+                stage_flow += " → " + " / ".join(terminal)
+            pipeline_section += f"\n- **{pipeline_name}**: {stage_flow}"
+
+        # Build users list
+        users_list = "\n".join(f"   - `{self.format_owner(rep)}` ({rep})" for rep in profile.sales_reps)
+
+        return f"""# Zoho CRM Import Guide — {profile.name}
 
 ## Prerequisites
-1. Create users in Zoho CRM matching the emails in `zoho_users.csv`
-2. Ensure deal stages in Zoho match the Stage values in the data
-3. Have admin access to the Zoho CRM account
+
+1. **Create users** in Zoho CRM matching the emails in `zoho_users.csv`:
+{users_list}
+2. Ensure you have **admin access** to the Zoho CRM account
+
+## Pipeline Setup ({profile.name})
+
+Create the following pipelines in **Setup → Customization → Pipelines**:
+{pipeline_section}
 
 ## Import Order
 
@@ -182,13 +203,13 @@ Import files in this exact order to preserve relationships:
 
 ### Step 1: Import Accounts
 1. Go to **Accounts** module
-2. Click the **...** menu > **Import**
+2. Click the **…** menu → **Import**
 3. Choose `zoho_accounts.csv`
 4. Map fields:
-   - `Account_Name` -> Account Name
-   - `Annual_Revenue` -> Annual Revenue
-   - `Employees` -> Employees
-   - `Billing_Street`, `Billing_City`, `Billing_State`, `Billing_Code` -> Billing address fields
+   - `Account_Name` → Account Name
+   - `Annual_Revenue` → Annual Revenue
+   - `Employees` → Employees
+   - `Billing_Street`, `Billing_City`, `Billing_State`, `Billing_Code` → Billing address fields
 5. Complete the import
 
 ### Step 2: Import Contacts
@@ -197,7 +218,7 @@ Import files in this exact order to preserve relationships:
 3. Choose `zoho_contacts.csv`
 4. Map fields:
    - `First_Name`, `Last_Name`, `Email`, `Phone`, `Title`
-   - `Account_Name` -> Account Name (Zoho will match by name)
+   - `Account_Name` → Account Name (Zoho will match by name)
 5. Complete the import — contacts will auto-link to accounts by name
 
 ### Step 3: Import Deals
@@ -205,19 +226,20 @@ Import files in this exact order to preserve relationships:
 2. Click **Import**
 3. Choose `zoho_deals.csv`
 4. Map fields:
-   - `Deal_Name` -> Deal Name
-   - `Stage` -> Stage
-   - `Amount` -> Amount
-   - `Closing_Date` -> Closing Date
-   - `Account_Name` -> Account Name (lookup)
-   - `Contact_Name` -> Contact Name (lookup)
+   - `Deal_Name` → Deal Name
+   - `Pipeline` → Pipeline
+   - `Stage` → Stage
+   - `Amount` → Amount
+   - `Closing_Date` → Closing Date
+   - `Account_Name` → Account Name (lookup)
+   - `Contact_Name` → Contact Name (lookup)
 5. Complete the import
 
 ### Step 4: Import Activities
 1. For **Calls**: Filter `zoho_activities.csv` for Activity_Type = "Calls"
-   - Go to **Activities > Calls** > Import
+   - Go to **Activities → Calls** → Import
 2. For **Meetings**: Filter for Activity_Type = "Meetings"
-   - Go to **Activities > Meetings** > Import
+   - Go to **Activities → Meetings** → Import
 3. For **Emails/Notes**: Import remaining as Notes
    - Go to module and import with account/contact lookup
 
@@ -232,13 +254,17 @@ Import files in this exact order to preserve relationships:
 | Email | Email |
 | Title | Title |
 | Deal_Name | Deal Name |
+| Pipeline | Pipeline |
 | Stage | Stage |
 | Amount | Amount |
 | Closing_Date | Closing Date |
 
-## Notes
-- Zoho uses **name-based matching** — Account_Name and Contact_Name must match exactly
+## Data Quality Notes
+- Zoho uses **name-based matching** — `Account_Name` and `Contact_Name` must match exactly. Import accounts first so lookups succeed.
+- Contact **emails are unique** per company domain — no duplicates
+- **Phone numbers** use consistent `(XXX) XXX-XXXX` format
 - The `Owner` field maps to Zoho user emails — create users before importing
 - Activity types are mapped to Zoho modules: Calls, Meetings, and Notes
-- Deals require a Closing_Date; open deals use an estimated future date
+- Deals require a `Closing_Date`; open deals use an estimated future date
+- The `zoho_users.csv` file lists all sales reps — create these as users in Zoho CRM before importing data
 """

@@ -125,6 +125,13 @@ class HubSpotExporter(BaseCRMExporter):
             self.contacts_df["email"],
         ))
 
+        # --- Companies (standalone, with clean domain) ---
+        acc_copy = self.accounts_df.copy()
+        acc_copy["website"] = acc_copy["website"].apply(self._get_domain)
+        files["hubspot_companies.csv"] = self._map_dataframe(
+            acc_copy, self.account_field_mapping()
+        )
+
         # --- Contacts with Companies ---
         contacts_assoc = self.contacts_df.copy()
         contacts_assoc["Company Domain Name"] = contacts_assoc["account_id"].astype(str).map(domain_lookup)
@@ -152,6 +159,12 @@ class HubSpotExporter(BaseCRMExporter):
         mapped_deals_c["Contact Email"] = deals_contact["Contact Email"]
         files["hubspot_deals_with_contacts.csv"] = mapped_deals_c
 
+        # --- Activities (standalone) ---
+        files["hubspot_activities.csv"] = self._map_dataframe(
+            self.activities_df, self.activity_field_mapping(),
+            owner_col="activity_owner", activity_type_col="activity_type"
+        )
+
         return files
 
     # ------------------------------------------------------------------ #
@@ -159,36 +172,58 @@ class HubSpotExporter(BaseCRMExporter):
     # ------------------------------------------------------------------ #
 
     def generate_import_guide(self) -> str:
-        return """# HubSpot Import Guide
+        profile = self.profile
+
+        # Build pipeline/stage section dynamically
+        pipeline_section = ""
+        for pipeline_name, stages in profile.pipelines.items():
+            active_stages = [s for s in stages if s not in ("Closed Won", "Closed Lost", "Churned")]
+            terminal = [s for s in stages if s in ("Closed Won", "Closed Lost", "Churned")]
+            stage_flow = " → ".join(active_stages)
+            if terminal:
+                stage_flow += " → " + " / ".join(terminal)
+            pipeline_section += f"\n- **{pipeline_name}**: {stage_flow}"
+
+        # Build users list
+        users_list = "\n".join(f"   - `{self.format_owner(rep)}` ({rep})" for rep in profile.sales_reps)
+
+        return f"""# HubSpot Import Guide — {profile.name}
 
 ## Prerequisites
-1. Create users in HubSpot matching the emails in `hubspot_users.csv`
-2. Ensure you have admin access to the HubSpot account
+
+1. **Create users** in HubSpot matching the emails in `hubspot_users.csv`:
+{users_list}
+2. Ensure you have **admin access** to the HubSpot account
+
+## Pipeline Setup ({profile.name})
+
+Create the following pipelines in **Settings → Objects → Deals → Pipelines**:
+{pipeline_section}
 
 ## Import Order
 
 Import files in this exact order to preserve relationships:
 
 ### Step 1: Import Companies
-1. Go to **Contacts > Companies**
-2. Click **Import** > **Start an import**
-3. Select **File from computer** > **One file** > **One object**
+1. Go to **Contacts → Companies**
+2. Click **Import** → **Start an import**
+3. Select **File from computer** → **One file** → **One object**
 4. Choose `hubspot_companies.csv`
 5. Map all fields and complete the import
 
 ### Step 2: Import Contacts with Company Associations
-1. Go to **Contacts > Contacts**
-2. Click **Import** > **Start an import**
-3. Select **File from computer** > **One file** > **Two objects**
+1. Go to **Contacts → Contacts**
+2. Click **Import** → **Start an import**
+3. Select **File from computer** → **One file** → **Two objects**
 4. Select **Contacts** and **Companies**
 5. Choose `hubspot_contacts_with_companies.csv`
 6. HubSpot will use the **Company Domain Name** column to match contacts to companies
 7. Map all fields and complete the import
 
 ### Step 3: Import Deals with Company Associations
-1. Go to **Sales > Deals**
-2. Click **Import** > **Start an import**
-3. Select **File from computer** > **One file** > **Two objects**
+1. Go to **Sales → Deals**
+2. Click **Import** → **Start an import**
+3. Select **File from computer** → **One file** → **Two objects**
 4. Select **Deals** and **Companies**
 5. Choose `hubspot_deals_with_companies.csv`
 6. Map all fields and complete the import
@@ -199,8 +234,8 @@ Import files in this exact order to preserve relationships:
 3. HubSpot will use the **Contact Email** column to match
 
 ### Step 5: Import Activities
-1. Go to **Contacts > Contacts**
-2. Click **Import** > **Start an import**
+1. Go to **Contacts → Contacts**
+2. Click **Import** → **Start an import**
 3. Choose `hubspot_activities.csv`
 4. Map activity fields and complete the import
 
@@ -209,6 +244,7 @@ Import files in this exact order to preserve relationships:
 | Generated Field | HubSpot Field |
 |----------------|---------------|
 | name | Company name |
+| domain | Company domain name |
 | annualrevenue | Annual revenue |
 | numberofemployees | Number of employees |
 | firstname | First name |
@@ -216,13 +252,18 @@ Import files in this exact order to preserve relationships:
 | email | Email |
 | jobtitle | Job title |
 | dealname | Deal name |
+| pipeline | Pipeline |
 | dealstage | Deal stage |
 | amount | Amount |
 | createdate | Create date |
 | closedate | Close date |
 
-## Notes
+## Data Quality Notes
+- The **domain** field in `hubspot_companies.csv` contains clean domains (e.g., `clouddata.io`) — these match the `Company Domain Name` column in association files
+- Contact **emails are unique** per company domain — no duplicates
+- **Phone numbers** use consistent `(XXX) XXX-XXXX` format
 - The `hubspot_owner_id` field maps to user emails — ensure users exist before importing
 - Activity types are mapped to HubSpot engagement types (EMAIL, CALL, MEETING, NOTE)
-- Deal stages should match your HubSpot pipeline configuration
+- Deal stages must match the pipeline configuration created above
+- The `hubspot_users.csv` file lists all sales reps — create these as users in HubSpot before importing data
 """

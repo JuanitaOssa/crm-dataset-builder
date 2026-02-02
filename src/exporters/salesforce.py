@@ -173,36 +173,68 @@ class SalesforceExporter(BaseCRMExporter):
     # ------------------------------------------------------------------ #
 
     def generate_import_guide(self) -> str:
-        return """# Salesforce Import Guide
+        profile = self.profile
+
+        # Build pipeline/stage section dynamically
+        pipeline_section = ""
+        for pipeline_name, stages in profile.pipelines.items():
+            active_stages = [s for s in stages if s not in ("Closed Won", "Closed Lost", "Churned")]
+            terminal = [s for s in stages if s in ("Closed Won", "Closed Lost", "Churned")]
+            stage_flow = " → ".join(active_stages)
+            if terminal:
+                stage_flow += " → " + " / ".join(terminal)
+            pipeline_section += f"\n- **{pipeline_name}**: {stage_flow}"
+
+        # Build users list
+        users_list = "\n".join(f"   - `{self.format_owner(rep)}` ({rep})" for rep in profile.sales_reps)
+
+        # Multi-pipeline note
+        multi_pipeline_note = ""
+        if len(profile.pipelines) > 1:
+            multi_pipeline_note = (
+                "\n> **Multiple pipelines**: Salesforce uses a single Stage picklist on Opportunities. "
+                "To support multiple pipelines, either create a custom `Pipeline__c` text field "
+                "or use **Record Types** to separate pipeline-specific stage picklists."
+            )
+
+        return f"""# Salesforce Import Guide — {profile.name}
 
 ## Prerequisites
-1. Create users in Salesforce matching the usernames in `salesforce_users.csv`
-2. Create a custom text field `External_ID__c` on Account, Contact, and Opportunity objects
+
+1. **Create users** in Salesforce matching the usernames in `salesforce_users.csv`:
+{users_list}
+2. Create a custom text field **`External_ID__c`** on Account, Contact, and Opportunity objects
    - Mark it as **External ID** and **Unique**
-3. Ensure pipeline stages in Salesforce match the StageName values in the data
+3. Configure Opportunity stages to match the data (see Pipeline Setup below)
+
+## Pipeline Setup ({profile.name})
+
+Add the following stage values to the Opportunity **StageName** picklist:
+{pipeline_section}
+{multi_pipeline_note}
 
 ## Import Order
 
 Import files in this exact order using **Data Loader** or **Data Import Wizard**:
 
 ### Step 1: Import Accounts
-1. Open **Data Loader** (or Setup > Data Import Wizard)
+1. Open **Data Loader** (or Setup → Data Import Wizard)
 2. Select **Insert** operation on the **Account** object
 3. Choose `salesforce_accounts.csv`
 4. Map fields:
-   - `External_ID__c` -> External_ID__c
-   - `Name` -> Account Name
-   - `AnnualRevenue` -> Annual Revenue
-   - `NumberOfEmployees` -> Employees
-   - `BillingStreet`, `BillingCity`, `BillingState`, `BillingPostalCode` -> Billing Address fields
+   - `External_ID__c` → External_ID__c
+   - `Name` → Account Name
+   - `AnnualRevenue` → Annual Revenue
+   - `NumberOfEmployees` → Employees
+   - `BillingStreet`, `BillingCity`, `BillingState`, `BillingPostalCode` → Billing Address fields
 5. Complete the import
 
 ### Step 2: Import Contacts
 1. Select **Insert** on the **Contact** object
 2. Choose `salesforce_contacts.csv`
 3. Map fields:
-   - `External_ID__c` -> External_ID__c
-   - `Account_External_ID__c` -> Account (External ID lookup)
+   - `External_ID__c` → External_ID__c
+   - `Account_External_ID__c` → Account (External ID lookup)
    - `FirstName`, `LastName`, `Email`, `Phone`, `Title`, `Department`
 4. Complete the import — contacts will auto-link to accounts via External ID
 
@@ -210,11 +242,11 @@ Import files in this exact order using **Data Loader** or **Data Import Wizard**
 1. Select **Insert** on the **Opportunity** object
 2. Choose `salesforce_opportunities.csv`
 3. Map fields:
-   - `External_ID__c` -> External_ID__c
-   - `Account_External_ID__c` -> Account (External ID lookup)
-   - `Contact_External_ID__c` -> Primary Contact (External ID lookup)
-   - `Name` -> Opportunity Name
-   - `StageName` -> Stage
+   - `External_ID__c` → External_ID__c
+   - `Account_External_ID__c` → Account (External ID lookup)
+   - `Contact_External_ID__c` → Primary Contact (External ID lookup)
+   - `Name` → Opportunity Name
+   - `StageName` → Stage
    - `Amount`, `CloseDate`, `CreatedDate`
 4. Complete the import
 
@@ -229,6 +261,7 @@ Import files in this exact order using **Data Loader** or **Data Import Wizard**
 | Generated Field | Salesforce Field |
 |----------------|-----------------|
 | Name | Account Name / Opportunity Name |
+| External_ID__c | External ID (custom) |
 | AnnualRevenue | Annual Revenue |
 | NumberOfEmployees | Employees |
 | BillingStreet | Billing Street |
@@ -239,9 +272,12 @@ Import files in this exact order using **Data Loader** or **Data Import Wizard**
 | Amount | Amount |
 | CloseDate | Close Date |
 
-## Notes
-- External_ID__c enables upsert operations for future data refreshes
+## Data Quality Notes
+- **External_ID__c** enables upsert operations — use it for future data refreshes without creating duplicates
+- Contact **emails are unique** per company domain — no duplicates
+- **Phone numbers** use consistent `(XXX) XXX-XXXX` format
 - The `Owner` field maps to Salesforce usernames — assign via Data Loader's owner lookup
 - Meetings map to Events; Calls, LinkedIn, and Notes map to Tasks
-- Ensure Opportunity stage values match your Salesforce org's picklist
+- **Stage values must match** your Salesforce org's picklist exactly — configure them in the Pipeline Setup step above
+- The `salesforce_users.csv` file lists all sales reps — create these as users in Salesforce before importing data
 """

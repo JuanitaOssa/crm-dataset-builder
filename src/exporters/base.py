@@ -161,22 +161,7 @@ class BaseCRMExporter(ABC):
         name = self.crm_name().lower()
         files = {}
 
-        # Mapped entity CSVs
-        files[f"{name}_companies.csv"] = self._map_dataframe(
-            self.accounts_df, self.account_field_mapping(), owner_col=None
-        )
-        files[f"{name}_contacts.csv"] = self._map_dataframe(
-            self.contacts_df, self.contact_field_mapping(), owner_col="contact_owner"
-        )
-        files[f"{name}_deals.csv"] = self._map_dataframe(
-            self.deals_df, self.deal_field_mapping(), owner_col="deal_owner"
-        )
-        files[f"{name}_activities.csv"] = self._map_dataframe(
-            self.activities_df, self.activity_field_mapping(),
-            owner_col="activity_owner", activity_type_col="activity_type"
-        )
-
-        # Association files (CRM-specific)
+        # CRM-specific data files (entities + associations)
         for filename, df in self.generate_association_files().items():
             files[filename] = df
 
