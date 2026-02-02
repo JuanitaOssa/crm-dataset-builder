@@ -12,13 +12,13 @@ Choose from three industry profiles, each with its own company names, pipelines,
 |---------|-----------|----------|-----------|
 | **B2B SaaS** | New Business, Renewal, Expansion, Self-Serve | SMB, Mid-Market, Enterprise, Self-Serve | $600 – $350K |
 | **Manufacturer** | New Accounts, Reorders, Custom/Engineered Solutions | SMB, Mid-Market, Enterprise | $5K – $5M |
-| **Consultancy** | New Engagements, Follow-On Projects, Retainer Renewals | SMB, Mid-Market, Enterprise | $25K – $2M |
+| **Consultancy** | New Business, Extension, Expansion | SMB, Mid-Market, Enterprise | $25K – $2M |
 
 **B2B SaaS** — Software companies with subscription-based sales cycles. Includes a Self-Serve (PLG) pipeline where accounts sign up, trial, and convert without sales involvement, with a small percentage converting to sales-led deals.
 
 **Manufacturer** — Industrial manufacturers and distributors with procurement-driven sales cycles. Longer sales cycles, higher enterprise deal values, and reorder-focused renewal pipelines.
 
-**Consultancy** — Professional services firms with engagement-based sales cycles. Deals are named by engagement type (e.g., "Digital Transformation", "M&A Due Diligence"), with high follow-on and retainer renewal rates.
+**Consultancy** — Professional services firms with engagement-based sales cycles. Deals are named by engagement type (e.g., "Digital Transformation", "M&A Due Diligence"). Extensions extend the current engagement (more time, same scope), while Expansions add new workstreams or services with existing clients.
 
 ## Generated Datasets
 

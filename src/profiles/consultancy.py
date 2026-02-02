@@ -200,38 +200,38 @@ class ConsultancyProfile(BaseProfile):
     @property
     def pipelines(self) -> Dict[str, List[str]]:
         return {
-            "New Engagements": [
+            "New Business": [
                 "Opportunity Qualified", "Discovery", "Proposal",
                 "Negotiation", "Verbal", "Closed Won", "Closed Lost",
             ],
-            "Follow-On Projects": [
-                "Opportunity Identified", "Scoping", "Proposal",
+            "Extension": [
+                "Extension Identified", "Scope Review", "Revised SOW",
                 "Verbal", "Closed Won", "Closed Lost",
             ],
-            "Retainer Renewals": [
-                "Renewal Discussion", "Scope Review", "Terms",
-                "Verbal", "Closed Won", "Closed Lost",
+            "Expansion": [
+                "Opportunity Identified", "Discovery", "Proposal",
+                "Negotiation", "Verbal", "Closed Won", "Closed Lost",
             ],
         }
 
     @property
     def primary_pipeline_name(self) -> str:
-        return "New Engagements"
+        return "New Business"
 
     @property
     def renewal_pipeline_name(self) -> str:
-        return "Retainer Renewals"
+        return "Extension"
 
     @property
     def expansion_pipeline_name(self) -> str:
-        return "Follow-On Projects"
+        return "Expansion"
 
     @property
     def outcome_rates(self) -> Dict[str, Dict[str, int]]:
         return {
-            "New Engagements": {"Won": 25, "Lost": 55, "Open": 20},
-            "Follow-On Projects": {"Won": 60, "Lost": 20, "Open": 20},
-            "Retainer Renewals": {"Won": 80, "Lost": 12, "Open": 8},
+            "New Business": {"Won": 25, "Lost": 55, "Open": 20},
+            "Extension": {"Won": 80, "Lost": 12, "Open": 8},
+            "Expansion": {"Won": 60, "Lost": 20, "Open": 20},
         }
 
     @property
@@ -296,24 +296,25 @@ class ConsultancyProfile(BaseProfile):
     @property
     def active_stage_weights(self) -> Dict[str, Dict[str, int]]:
         return {
-            "New Engagements": {
+            "New Business": {
                 "Opportunity Qualified": 10,
                 "Discovery": 25,
                 "Proposal": 30,
                 "Negotiation": 20,
                 "Verbal": 15,
             },
-            "Follow-On Projects": {
-                "Opportunity Identified": 15,
-                "Scoping": 30,
-                "Proposal": 30,
-                "Verbal": 25,
-            },
-            "Retainer Renewals": {
-                "Renewal Discussion": 20,
+            "Extension": {
+                "Extension Identified": 20,
                 "Scope Review": 30,
-                "Terms": 30,
+                "Revised SOW": 30,
                 "Verbal": 20,
+            },
+            "Expansion": {
+                "Opportunity Identified": 10,
+                "Discovery": 25,
+                "Proposal": 30,
+                "Negotiation": 20,
+                "Verbal": 15,
             },
         }
 
