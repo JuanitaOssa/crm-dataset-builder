@@ -7,7 +7,7 @@ demonstrations, and development purposes.
 Usage:
     python src/main.py
 
-The tool presents a menu to generate accounts, contacts, or both.
+The tool presents a menu to generate accounts, contacts, deals, or all three.
 Output CSV files are saved to the output directory.
 """
 
@@ -20,13 +20,14 @@ from collections import Counter
 # This allows running the script from the project root directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from generators import AccountGenerator, ContactGenerator
+from generators import AccountGenerator, ContactGenerator, DealGenerator
 
 
 # Path helpers
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ACCOUNTS_PATH = os.path.join(PROJECT_ROOT, "output", "accounts.csv")
 CONTACTS_PATH = os.path.join(PROJECT_ROOT, "output", "contacts.csv")
+DEALS_PATH = os.path.join(PROJECT_ROOT, "output", "deals.csv")
 
 
 def display_menu() -> str:
@@ -34,18 +35,19 @@ def display_menu() -> str:
     Display the main menu and return the user's choice.
 
     Returns:
-        The selected option as a string ('1', '2', or '3').
+        The selected option as a string ('1', '2', '3', or '4').
     """
     print("\nWhat would you like to generate?")
     print("  1) Accounts")
     print("  2) Contacts")
-    print("  3) All (accounts + contacts)")
+    print("  3) Deals")
+    print("  4) All (accounts + contacts + deals)")
 
     while True:
-        choice = input("\nSelect an option [1/2/3]: ").strip()
-        if choice in ("1", "2", "3"):
+        choice = input("\nSelect an option [1/2/3/4]: ").strip()
+        if choice in ("1", "2", "3", "4"):
             return choice
-        print("Invalid choice. Please enter 1, 2, or 3.")
+        print("Invalid choice. Please enter 1, 2, 3, or 4.")
 
 
 def get_user_input() -> int:
@@ -248,10 +250,141 @@ def generate_contacts_flow() -> None:
         print()
 
 
+def save_deals_to_csv(deals: list, filepath: str) -> None:
+    """
+    Save generated deals to a CSV file.
+
+    Creates the output directory if it doesn't exist.
+
+    Args:
+        deals: List of Deal dataclass instances.
+        filepath: Path where the CSV file should be saved.
+    """
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+    fieldnames = [
+        "deal_id",
+        "deal_name",
+        "account_id",
+        "contact_id",
+        "pipeline",
+        "segment",
+        "stage",
+        "amount",
+        "created_date",
+        "close_date",
+        "deal_status",
+        "deal_owner",
+        "probability",
+        "loss_reason",
+    ]
+
+    with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for deal in deals:
+            writer.writerow({
+                "deal_id": deal.deal_id,
+                "deal_name": deal.deal_name,
+                "account_id": deal.account_id,
+                "contact_id": deal.contact_id,
+                "pipeline": deal.pipeline,
+                "segment": deal.segment,
+                "stage": deal.stage,
+                "amount": deal.amount,
+                "created_date": deal.created_date,
+                "close_date": deal.close_date,
+                "deal_status": deal.deal_status,
+                "deal_owner": deal.deal_owner,
+                "probability": deal.probability,
+                "loss_reason": deal.loss_reason,
+            })
+
+
+def generate_deals_flow() -> None:
+    """Run the deals generation workflow."""
+    if not os.path.exists(ACCOUNTS_PATH):
+        print("\n[!] accounts.csv not found at: " + ACCOUNTS_PATH)
+        print("    Please generate accounts first (option 1) or run all (option 4).")
+        return
+
+    if not os.path.exists(CONTACTS_PATH):
+        print("\n[!] contacts.csv not found at: " + CONTACTS_PATH)
+        print("    Please generate contacts first (option 2) or run all (option 4).")
+        return
+
+    print(f"\nLoading accounts from: {ACCOUNTS_PATH}")
+    print(f"Loading contacts from: {CONTACTS_PATH}")
+    generator = DealGenerator(ACCOUNTS_PATH, CONTACTS_PATH)
+
+    print(f"Generating deals for {len(generator.accounts)} accounts...")
+    deals = generator.generate()
+
+    save_deals_to_csv(deals, DEALS_PATH)
+
+    # Summary stats
+    total = len(deals)
+    accounts_with_deals = len(set(d.account_id for d in deals))
+    total_accounts = len(generator.accounts)
+    accounts_without_deals = total_accounts - accounts_with_deals
+
+    pipeline_counts = Counter(d.pipeline for d in deals)
+    segment_counts = Counter(d.segment for d in deals)
+
+    print("\n" + "-" * 50)
+    print("Success!")
+    print(f"  Generated {total} deals")
+    print(f"  Accounts with deals: {accounts_with_deals}")
+    print(f"  Accounts without deals: {accounts_without_deals}")
+    print(f"  Saved to: {DEALS_PATH}")
+    print("-" * 50)
+
+    print("\nPipeline breakdown:")
+    for pipeline in ["New Business", "Renewal", "Expansion"]:
+        print(f"  {pipeline}: {pipeline_counts.get(pipeline, 0)} deals")
+
+    print("\nSegment breakdown:")
+    for segment in ["SMB", "Mid-Market", "Enterprise"]:
+        print(f"  {segment}: {segment_counts.get(segment, 0)} deals")
+
+    print("\nOutcome rates by pipeline:")
+    for pipeline in ["New Business", "Renewal", "Expansion"]:
+        pipe_deals = [d for d in deals if d.pipeline == pipeline]
+        if not pipe_deals:
+            continue
+        won = sum(1 for d in pipe_deals if d.deal_status == "Won")
+        lost = sum(1 for d in pipe_deals if d.deal_status == "Lost")
+        active = sum(1 for d in pipe_deals if d.deal_status == "Active")
+        n = len(pipe_deals)
+        print(
+            f"  {pipeline}: Won {won}/{n} ({won/n*100:.0f}%) | "
+            f"Lost {lost}/{n} ({lost/n*100:.0f}%) | "
+            f"Active {active}/{n} ({active/n*100:.0f}%)"
+        )
+
+    print("\nAverage deal size by segment:")
+    for segment in ["SMB", "Mid-Market", "Enterprise"]:
+        seg_deals = [d for d in deals if d.segment == segment]
+        if seg_deals:
+            avg = sum(d.amount for d in seg_deals) / len(seg_deals)
+            print(f"  {segment}: ${avg:,.0f}")
+
+    # Preview first 3 deals
+    print("\nPreview of generated deals:")
+    print("-" * 50)
+    for deal in deals[:3]:
+        print(f"  - {deal.deal_name}")
+        print(f"    {deal.pipeline} | {deal.stage} | ${deal.amount:,}")
+        print(f"    Account #{deal.account_id} | {deal.deal_status}")
+        print()
+
+
 def generate_all_flow() -> None:
-    """Run accounts then contacts generation sequentially."""
+    """Run accounts, contacts, then deals generation sequentially."""
     generate_accounts_flow()
     generate_contacts_flow()
+    generate_deals_flow()
 
 
 def main():
@@ -273,6 +406,8 @@ def main():
     elif choice == "2":
         generate_contacts_flow()
     elif choice == "3":
+        generate_deals_flow()
+    elif choice == "4":
         generate_all_flow()
 
 

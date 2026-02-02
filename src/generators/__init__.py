@@ -7,5 +7,6 @@ such as accounts, contacts, opportunities, etc.
 
 from .accounts import AccountGenerator
 from .contacts import ContactGenerator
+from .deals import DealGenerator
 
-__all__ = ["AccountGenerator", "ContactGenerator"]
+__all__ = ["AccountGenerator", "ContactGenerator", "DealGenerator"]
