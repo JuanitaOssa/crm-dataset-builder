@@ -188,113 +188,160 @@ class HubSpotExporter(BaseCRMExporter):
 
     def generate_master_file(self) -> pd.DataFrame:
         """
-        Generate a single denormalized HubSpot master import file.
+        Generate a fully denormalized HubSpot master import file.
 
-        Each row has a Record Type (COMPANY, CONTACT, DEAL, ACTIVITY) and
-        only populates the columns relevant to that record type. Association
-        fields (Company Domain Name, Contact Email, Deal Name) link records.
+        Each row represents a complete relationship chain (company + contact +
+        deal + activity on one row). The CRM deduplicates by domain (companies),
+        email (contacts), and deal name (deals). Activities are unique per row.
         """
         domain_lookup, email_lookup, deal_name_lookup = self._build_lookups()
+        type_map = self.activity_type_mapping()
 
-        # Master file column order
+        # Master file column order — company → contact → deal → activity → owner
         columns = [
-            "Record Type",
             # Company fields
             "Company Domain Name", "Company Name", "Industry",
-            "Employee Count", "Annual Revenue", "Street Address",
-            "City", "State", "Zip Code", "Country", "Description",
-            "Founded Year",
+            "Number of Employees", "Annual Revenue", "Street Address",
+            "City", "State", "Zip Code", "Country",
             # Contact fields
             "Contact Email", "Contact First Name", "Contact Last Name",
             "Contact Title", "Contact Phone", "Contact Department",
             # Deal fields
-            "Deal Name", "Pipeline", "Stage", "Amount",
-            "Close Date", "Created Date", "Deal Status",
-            # Activity fields
-            "Activity Type", "Activity Subject", "Activity Date",
-            "Activity Duration", "Activity Notes",
-            # Owner (shared)
-            "Owner Email",
+            "Deal Name", "Pipeline", "Deal Stage", "Amount",
+            "Close Date", "Create Date", "Deal Status",
         ]
-
-        # Check if subscription_type is in this profile's deal fields
         has_subscription = "subscription_type" in self.profile.deal_fields
         if has_subscription:
-            # Insert Subscription Type after Deal Status
-            idx = columns.index("Deal Status") + 1
-            columns.insert(idx, "Subscription Type")
+            columns.append("Subscription Type")
+        # Activity fields + owner
+        columns += [
+            "Activity Type", "Activity Subject", "Activity Date",
+            "Activity Duration", "Activity Notes",
+            "Owner Email",
+        ]
 
         def _empty_row():
             return {c: "" for c in columns}
 
-        rows = []
-
-        # --- COMPANY rows ---
-        for _, acc in self.accounts_df.iterrows():
-            row = _empty_row()
-            row["Record Type"] = "COMPANY"
+        def _fill_company(row, acc):
+            """Populate company columns on a row."""
             row["Company Domain Name"] = self._get_domain(acc["website"])
             row["Company Name"] = acc["company_name"]
             row["Industry"] = acc["industry"]
-            row["Employee Count"] = acc["employee_count"]
+            row["Number of Employees"] = acc["employee_count"]
             row["Annual Revenue"] = acc["annual_revenue"]
             row["Street Address"] = acc["street_address"]
             row["City"] = acc["city"]
             row["State"] = acc["state"]
             row["Zip Code"] = acc["zip_code"]
             row["Country"] = acc["country"]
-            row["Description"] = acc.get("description", "")
-            row["Founded Year"] = acc.get("founded_year", "")
-            rows.append(row)
 
-        # --- CONTACT rows ---
-        for _, con in self.contacts_df.iterrows():
-            row = _empty_row()
-            row["Record Type"] = "CONTACT"
-            row["Company Domain Name"] = domain_lookup.get(str(con["account_id"]), "")
+        def _fill_contact(row, con):
+            """Populate contact columns on a row."""
             row["Contact Email"] = con["email"]
             row["Contact First Name"] = con["first_name"]
             row["Contact Last Name"] = con["last_name"]
             row["Contact Title"] = con["title"]
             row["Contact Phone"] = con["phone"]
             row["Contact Department"] = con["department"]
-            row["Owner Email"] = self.format_owner(con["contact_owner"]) if con["contact_owner"] else ""
-            rows.append(row)
 
-        # --- DEAL rows ---
-        for _, deal in self.deals_df.iterrows():
-            row = _empty_row()
-            row["Record Type"] = "DEAL"
-            row["Company Domain Name"] = domain_lookup.get(str(deal["account_id"]), "")
-            row["Contact Email"] = email_lookup.get(str(deal["contact_id"]), "")
+        def _fill_deal(row, deal):
+            """Populate deal columns on a row."""
             row["Deal Name"] = deal["deal_name"]
             row["Pipeline"] = deal["pipeline"]
-            row["Stage"] = deal["stage"]
+            row["Deal Stage"] = deal["stage"]
             row["Amount"] = deal["amount"]
             row["Close Date"] = deal["close_date"]
-            row["Created Date"] = deal["created_date"]
+            row["Create Date"] = deal["created_date"]
             row["Deal Status"] = deal["deal_status"]
             if has_subscription:
                 row["Subscription Type"] = deal.get("subscription_type", "")
             row["Owner Email"] = self.format_owner(deal["deal_owner"]) if deal["deal_owner"] else ""
-            rows.append(row)
 
-        # --- ACTIVITY rows ---
-        type_map = self.activity_type_mapping()
-        for _, act in self.activities_df.iterrows():
-            row = _empty_row()
-            row["Record Type"] = "ACTIVITY"
-            row["Company Domain Name"] = domain_lookup.get(str(act["account_id"]), "")
-            row["Contact Email"] = email_lookup.get(str(act["contact_id"]), "")
-            deal_id = str(act["deal_id"]) if act["deal_id"] else ""
-            row["Deal Name"] = deal_name_lookup.get(deal_id, "")
+        def _fill_activity(row, act):
+            """Populate activity columns on a row."""
             row["Activity Type"] = type_map.get(act["activity_type"], act["activity_type"])
             row["Activity Subject"] = act["subject"]
             row["Activity Date"] = act["activity_date"]
             row["Activity Duration"] = act["duration_minutes"] if act["duration_minutes"] else ""
             row["Activity Notes"] = act["notes"] if act["notes"] else ""
             row["Owner Email"] = self.format_owner(act["activity_owner"]) if act["activity_owner"] else ""
-            rows.append(row)
+
+        # Build indexes: group contacts by account, deals by contact,
+        # activities by deal_id and by contact_id (non-deal)
+        contacts_by_account = {}
+        for _, con in self.contacts_df.iterrows():
+            contacts_by_account.setdefault(str(con["account_id"]), []).append(con)
+
+        deals_by_contact = {}
+        for _, deal in self.deals_df.iterrows():
+            deals_by_contact.setdefault(str(deal["contact_id"]), []).append(deal)
+
+        activities_by_deal = {}
+        activities_by_contact_no_deal = {}
+        for _, act in self.activities_df.iterrows():
+            if act["deal_id"]:
+                activities_by_deal.setdefault(str(act["deal_id"]), []).append(act)
+            else:
+                activities_by_contact_no_deal.setdefault(str(act["contact_id"]), []).append(act)
+
+        rows = []
+
+        # Walk the relationship tree: account → contact → deal → activity
+        for _, acc in self.accounts_df.iterrows():
+            acc_id = str(acc["id"])
+            acc_contacts = contacts_by_account.get(acc_id, [])
+
+            if not acc_contacts:
+                # Company with no contacts — one row with company only
+                row = _empty_row()
+                _fill_company(row, acc)
+                rows.append(row)
+                continue
+
+            for con in acc_contacts:
+                con_id = str(con["contact_id"])
+                con_deals = deals_by_contact.get(con_id, [])
+                con_activities_no_deal = activities_by_contact_no_deal.get(con_id, [])
+
+                if not con_deals and not con_activities_no_deal:
+                    # Contact with no deals and no activities
+                    row = _empty_row()
+                    _fill_company(row, acc)
+                    _fill_contact(row, con)
+                    row["Owner Email"] = self.format_owner(con["contact_owner"]) if con["contact_owner"] else ""
+                    rows.append(row)
+                    continue
+
+                # Process deals for this contact
+                for deal in con_deals:
+                    deal_id = str(deal["deal_id"])
+                    deal_activities = activities_by_deal.get(deal_id, [])
+
+                    if not deal_activities:
+                        # Deal with no activities
+                        row = _empty_row()
+                        _fill_company(row, acc)
+                        _fill_contact(row, con)
+                        _fill_deal(row, deal)
+                        rows.append(row)
+                    else:
+                        # One row per activity on this deal
+                        for act in deal_activities:
+                            row = _empty_row()
+                            _fill_company(row, acc)
+                            _fill_contact(row, con)
+                            _fill_deal(row, deal)
+                            _fill_activity(row, act)
+                            rows.append(row)
+
+                # Process non-deal activities for this contact
+                for act in con_activities_no_deal:
+                    row = _empty_row()
+                    _fill_company(row, acc)
+                    _fill_contact(row, con)
+                    _fill_activity(row, act)
+                    rows.append(row)
 
         return pd.DataFrame(rows, columns=columns)
 
@@ -335,18 +382,23 @@ Create the following pipelines in **Settings → Objects → Deals → Pipelines
 
 ## Option A — Master File Import (Recommended)
 
-Use `hubspot_master_import.csv` for the simplest experience with all associations pre-linked.
+Use `hubspot_master_import.csv` — a fully denormalized file where each row contains company, contact, deal, and activity data together. The CRM automatically deduplicates:
+- **Companies** are matched by domain — the same company appearing on multiple rows is imported once
+- **Contacts** are matched by email and automatically associated with the company on the same row
+- **Deals** are matched by deal name and associated with the company and contact on the same row
+- **Activities** are created one per row and associated with the contact and deal on the same row
 
+**Steps:**
 1. Go to **Contacts → Import** → **Start an import**
 2. Select **File from computer** → **One file** → **Multiple objects**
 3. Choose `hubspot_master_import.csv`
-4. Map the **Record Type** column to identify object types (COMPANY, CONTACT, DEAL, ACTIVITY)
-5. Map association fields:
-   - **Company Domain Name** — links contacts, deals, and activities to companies
-   - **Contact Email** — links deals and activities to contacts
-   - **Deal Name** — links activities to deals
-6. Map remaining fields to their HubSpot equivalents
-7. Complete the import — all records are created with associations in one step
+4. Select object types: **Companies**, **Contacts**, **Deals**
+5. Map columns to HubSpot fields:
+   - **Company Domain Name** → Company domain (used for matching and association)
+   - **Contact Email** → Email (used for matching and association)
+   - **Deal Name** → Deal name
+   - Map remaining fields to their HubSpot equivalents
+6. Complete the import — all records created with associations in one step
 
 ---
 

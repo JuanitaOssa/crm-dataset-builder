@@ -174,113 +174,156 @@ class SalesforceExporter(BaseCRMExporter):
 
     def generate_master_file(self) -> pd.DataFrame:
         """
-        Generate a single denormalized Salesforce master import file.
+        Generate a fully denormalized Salesforce master import file.
 
-        Each row has a Record Type (Account, Contact, Opportunity, Task) and
-        only populates the columns relevant to that record type. External_ID__c
-        fields link records across objects.
+        Each row represents a complete relationship chain (account + contact +
+        opportunity + activity on one row). The CRM deduplicates by External_ID__c
+        fields. Activities are unique per row.
         """
-        # Master file column order — prefixed names avoid Salesforce collisions
-        # (Name is used for both Account and Opportunity, Description for both)
-        columns = [
-            "Record Type",
-            # External ID references
-            "External_ID__c", "Account_External_ID__c",
-            "Contact_External_ID__c", "Opportunity_External_ID__c",
-            # Account fields
-            "Account_Name", "Industry", "AnnualRevenue", "NumberOfEmployees",
-            "BillingStreet", "BillingCity", "BillingState", "BillingPostalCode",
-            "BillingCountry", "Website", "Account_Description",
-            # Contact fields
-            "Email", "FirstName", "LastName", "Title", "Phone", "Department",
-            # Opportunity fields
-            "Opportunity_Name", "StageName", "Amount",
-            "CreatedDate", "CloseDate", "Status",
-            # Activity fields
-            "Type", "Subject", "ActivityDate", "DurationInMinutes",
-            "Activity_Description",
-            # Owner (shared)
-            "Owner",
-        ]
+        type_map = self.activity_type_mapping()
 
-        # Check if subscription_type is in this profile's deal fields
+        # Master file column order — account → contact → opportunity → activity → owner
+        columns = [
+            # Account fields (with External ID)
+            "Account_External_ID__c", "Account_Name", "Industry",
+            "NumberOfEmployees", "AnnualRevenue",
+            "BillingStreet", "BillingCity", "BillingState",
+            "BillingPostalCode", "BillingCountry", "Website",
+            # Contact fields (with External ID)
+            "Contact_External_ID__c", "Email", "FirstName", "LastName",
+            "Title", "Phone", "Department",
+            # Opportunity fields (with External ID)
+            "Opportunity_External_ID__c", "Opportunity_Name", "StageName",
+            "Amount", "CloseDate", "CreatedDate", "Status",
+        ]
         has_subscription = "subscription_type" in self.profile.deal_fields
         if has_subscription:
-            idx = columns.index("Status") + 1
-            columns.insert(idx, "Subscription_Type__c")
+            columns.append("Subscription_Type__c")
+        # Activity fields + owner
+        columns += [
+            "Type", "Subject", "ActivityDate", "DurationInMinutes",
+            "Activity_Description",
+            "Owner",
+        ]
 
         def _empty_row():
             return {c: "" for c in columns}
 
-        rows = []
-
-        # --- Account rows ---
-        for _, acc in self.accounts_df.iterrows():
-            row = _empty_row()
-            row["Record Type"] = "Account"
-            row["External_ID__c"] = f"ACC-{acc['id']}"
+        def _fill_account(row, acc):
+            """Populate account columns on a row."""
+            row["Account_External_ID__c"] = f"ACC-{acc['id']}"
             row["Account_Name"] = acc["company_name"]
             row["Industry"] = acc["industry"]
-            row["AnnualRevenue"] = acc["annual_revenue"]
             row["NumberOfEmployees"] = acc["employee_count"]
+            row["AnnualRevenue"] = acc["annual_revenue"]
             row["BillingStreet"] = acc["street_address"]
             row["BillingCity"] = acc["city"]
             row["BillingState"] = acc["state"]
             row["BillingPostalCode"] = acc["zip_code"]
             row["BillingCountry"] = acc["country"]
             row["Website"] = acc["website"]
-            row["Account_Description"] = acc.get("description", "")
-            rows.append(row)
 
-        # --- Contact rows ---
-        for _, con in self.contacts_df.iterrows():
-            row = _empty_row()
-            row["Record Type"] = "Contact"
-            row["External_ID__c"] = f"CON-{con['contact_id']}"
-            row["Account_External_ID__c"] = f"ACC-{con['account_id']}"
+        def _fill_contact(row, con):
+            """Populate contact columns on a row."""
+            row["Contact_External_ID__c"] = f"CON-{con['contact_id']}"
             row["Email"] = con["email"]
             row["FirstName"] = con["first_name"]
             row["LastName"] = con["last_name"]
             row["Title"] = con["title"]
             row["Phone"] = con["phone"]
             row["Department"] = con["department"]
-            row["Owner"] = self.format_owner(con["contact_owner"]) if con["contact_owner"] else ""
-            rows.append(row)
 
-        # --- Opportunity rows ---
-        for _, deal in self.deals_df.iterrows():
-            row = _empty_row()
-            row["Record Type"] = "Opportunity"
-            row["External_ID__c"] = f"OPP-{deal['deal_id']}"
-            row["Account_External_ID__c"] = f"ACC-{deal['account_id']}"
-            row["Contact_External_ID__c"] = f"CON-{deal['contact_id']}"
+        def _fill_opportunity(row, deal):
+            """Populate opportunity columns on a row."""
+            row["Opportunity_External_ID__c"] = f"OPP-{deal['deal_id']}"
             row["Opportunity_Name"] = deal["deal_name"]
             row["StageName"] = deal["stage"]
             row["Amount"] = deal["amount"]
-            row["CreatedDate"] = deal["created_date"]
             row["CloseDate"] = deal["close_date"]
+            row["CreatedDate"] = deal["created_date"]
             row["Status"] = deal["deal_status"]
             if has_subscription:
                 row["Subscription_Type__c"] = deal.get("subscription_type", "")
             row["Owner"] = self.format_owner(deal["deal_owner"]) if deal["deal_owner"] else ""
-            rows.append(row)
 
-        # --- Task/Event rows (activities) ---
-        type_map = self.activity_type_mapping()
-        for _, act in self.activities_df.iterrows():
-            row = _empty_row()
-            row["Record Type"] = "Task"
-            row["Account_External_ID__c"] = f"ACC-{act['account_id']}"
-            row["Contact_External_ID__c"] = f"CON-{act['contact_id']}"
-            if act["deal_id"]:
-                row["Opportunity_External_ID__c"] = f"OPP-{act['deal_id']}"
+        def _fill_activity(row, act):
+            """Populate activity columns on a row."""
             row["Type"] = type_map.get(act["activity_type"], act["activity_type"])
             row["Subject"] = act["subject"]
             row["ActivityDate"] = act["activity_date"]
             row["DurationInMinutes"] = act["duration_minutes"] if act["duration_minutes"] else ""
             row["Activity_Description"] = act["notes"] if act["notes"] else ""
             row["Owner"] = self.format_owner(act["activity_owner"]) if act["activity_owner"] else ""
-            rows.append(row)
+
+        # Build indexes: group contacts by account, deals by contact,
+        # activities by deal_id and by contact_id (non-deal)
+        contacts_by_account = {}
+        for _, con in self.contacts_df.iterrows():
+            contacts_by_account.setdefault(str(con["account_id"]), []).append(con)
+
+        deals_by_contact = {}
+        for _, deal in self.deals_df.iterrows():
+            deals_by_contact.setdefault(str(deal["contact_id"]), []).append(deal)
+
+        activities_by_deal = {}
+        activities_by_contact_no_deal = {}
+        for _, act in self.activities_df.iterrows():
+            if act["deal_id"]:
+                activities_by_deal.setdefault(str(act["deal_id"]), []).append(act)
+            else:
+                activities_by_contact_no_deal.setdefault(str(act["contact_id"]), []).append(act)
+
+        rows = []
+
+        # Walk the relationship tree: account → contact → opportunity → activity
+        for _, acc in self.accounts_df.iterrows():
+            acc_id = str(acc["id"])
+            acc_contacts = contacts_by_account.get(acc_id, [])
+
+            if not acc_contacts:
+                row = _empty_row()
+                _fill_account(row, acc)
+                rows.append(row)
+                continue
+
+            for con in acc_contacts:
+                con_id = str(con["contact_id"])
+                con_deals = deals_by_contact.get(con_id, [])
+                con_activities_no_deal = activities_by_contact_no_deal.get(con_id, [])
+
+                if not con_deals and not con_activities_no_deal:
+                    row = _empty_row()
+                    _fill_account(row, acc)
+                    _fill_contact(row, con)
+                    row["Owner"] = self.format_owner(con["contact_owner"]) if con["contact_owner"] else ""
+                    rows.append(row)
+                    continue
+
+                for deal in con_deals:
+                    deal_id = str(deal["deal_id"])
+                    deal_activities = activities_by_deal.get(deal_id, [])
+
+                    if not deal_activities:
+                        row = _empty_row()
+                        _fill_account(row, acc)
+                        _fill_contact(row, con)
+                        _fill_opportunity(row, deal)
+                        rows.append(row)
+                    else:
+                        for act in deal_activities:
+                            row = _empty_row()
+                            _fill_account(row, acc)
+                            _fill_contact(row, con)
+                            _fill_opportunity(row, deal)
+                            _fill_activity(row, act)
+                            rows.append(row)
+
+                for act in con_activities_no_deal:
+                    row = _empty_row()
+                    _fill_account(row, acc)
+                    _fill_contact(row, con)
+                    _fill_activity(row, act)
+                    rows.append(row)
 
         return pd.DataFrame(rows, columns=columns)
 
@@ -333,17 +376,19 @@ Add the following stage values to the Opportunity **StageName** picklist:
 
 ## Option A — Master File Import (Recommended)
 
-Use `salesforce_master_import.csv` for the simplest experience with all associations pre-linked.
+Use `salesforce_master_import.csv` — a fully denormalized file where each row contains account, contact, opportunity, and activity data together. The CRM automatically deduplicates:
+- **Accounts** are matched by `Account_External_ID__c` — the same account appearing on multiple rows is imported once
+- **Contacts** are matched by `Contact_External_ID__c` and automatically associated with the account on the same row
+- **Opportunities** are matched by `Opportunity_External_ID__c` and associated with the account and contact on the same row
+- **Activities** are created one per row and associated with the contact and opportunity on the same row
 
-1. Open **Data Loader**
-2. Choose `salesforce_master_import.csv`
-3. The **Record Type** column identifies each row: Account, Contact, Opportunity, or Task
-4. Filter by Record Type and import each object type in order:
-   - **Accounts** first (Record Type = "Account")
-   - **Contacts** second (Record Type = "Contact") — use `Account_External_ID__c` for account lookup
-   - **Opportunities** third (Record Type = "Opportunity") — use `Account_External_ID__c` and `Contact_External_ID__c`
-   - **Tasks** last (Record Type = "Task") — use all External ID references
-5. All `External_ID__c` references are pre-populated for cross-object linking
+**Steps:**
+1. Open **Data Loader** and import each object in order from `salesforce_master_import.csv`:
+   - **Accounts** first — map `Account_External_ID__c`, `Account_Name`, and account fields
+   - **Contacts** second — map `Contact_External_ID__c`, `Account_External_ID__c` (for lookup), and contact fields
+   - **Opportunities** third — map all three External IDs and opportunity fields
+   - **Tasks/Events** last — map activity fields and External ID references for lookups
+2. All `External_ID__c` references are pre-populated — the same file serves all four imports
 
 ---
 
