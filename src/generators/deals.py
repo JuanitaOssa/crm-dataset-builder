@@ -90,6 +90,8 @@ class DealGenerator:
             aid = int(c["account_id"])
             self.contacts_by_account.setdefault(aid, []).append(c)
 
+        self._assigned_contacts: Dict[int, set] = {}
+
         self.account_segments: Dict[int, str] = {}
         self.account_names: Dict[int, str] = {}
         for a in self.accounts:
@@ -151,6 +153,18 @@ class DealGenerator:
         return random.choices(
             list(weights.keys()), weights=list(weights.values()), k=1
         )[0]
+
+    def _pick_contact(self, aid: int) -> dict:
+        """
+        Pick a contact for a deal, preferring contacts not yet assigned
+        to any deal at this account. Falls back to random if all assigned.
+        """
+        candidates = self.contacts_by_account[aid]
+        assigned = self._assigned_contacts.get(aid, set())
+        unassigned = [c for c in candidates if int(c["contact_id"]) not in assigned]
+        contact = random.choice(unassigned) if unassigned else random.choice(candidates)
+        self._assigned_contacts.setdefault(aid, set()).add(int(contact["contact_id"]))
+        return contact
 
     def _pick_active_stage(self, pipeline: str) -> str:
         """Pick an open-deal stage using weighted probabilities."""
@@ -227,7 +241,7 @@ class DealGenerator:
         original_amount: int,
     ) -> None:
         """Generate a single Renewal or Expansion deal and append it."""
-        contact = random.choice(self.contacts_by_account[aid])
+        contact = self._pick_contact(aid)
         cid = int(contact["contact_id"])
         owner = random.choice(self.profile.sales_reps)
         amount = self._generate_amount(pipeline, segment, original_amount)
@@ -336,7 +350,7 @@ class DealGenerator:
             if aid not in self.contacts_by_account:
                 continue
 
-            contact = random.choice(self.contacts_by_account[aid])
+            contact = self._pick_contact(aid)
             cid = int(contact["contact_id"])
 
             # Determine subscription type
@@ -417,7 +431,7 @@ class DealGenerator:
             segment = self.account_segments[aid]
 
             for _ in range(self._generate_nb_deal_count()):
-                contact = random.choice(self.contacts_by_account[aid])
+                contact = self._pick_contact(aid)
                 cid = int(contact["contact_id"])
                 owner = random.choice(self.profile.sales_reps)
                 amount = self._generate_amount(primary, segment)
@@ -523,7 +537,7 @@ class DealGenerator:
             if aid in set(selected) or aid not in self.contacts_by_account:
                 continue
             segment = self.account_segments[aid]
-            contact = random.choice(self.contacts_by_account[aid])
+            contact = self._pick_contact(aid)
             cid = int(contact["contact_id"])
             owner = random.choice(self.profile.sales_reps)
             amount = self._generate_amount(primary, segment)

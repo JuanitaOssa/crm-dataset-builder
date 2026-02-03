@@ -172,8 +172,7 @@ class ZohoExporter(BaseCRMExporter):
         """
         Generate Zoho master records file.
 
-        Each deal appears exactly ONCE to prevent duplicates. Accounts and
-        contacts may repeat (Zoho deduplicates by name matching).
+        One row per contact. Deals appear once, on the row of their primary contact.
 
         Row structure:
         - Account-only rows: account fields filled, contact/deal blank
@@ -276,63 +275,6 @@ class ZohoExporter(BaseCRMExporter):
         return pd.DataFrame(rows, columns=columns)
 
     # ------------------------------------------------------------------ #
-    #  Master activities file (one row per activity)                       #
-    # ------------------------------------------------------------------ #
-
-    def generate_master_activities(self) -> pd.DataFrame:
-        """
-        Generate Zoho master activities file.
-
-        Each activity appears exactly once. Association columns reference
-        existing records by name matching.
-        """
-        type_map = self.activity_type_mapping()
-
-        # Build lookups
-        account_name_lookup = dict(zip(
-            self.accounts_df["id"].astype(str),
-            self.accounts_df["company_name"],
-        ))
-        contact_name_lookup = dict(zip(
-            self.contacts_df["contact_id"].astype(str),
-            self.contacts_df["first_name"] + " " + self.contacts_df["last_name"],
-        ))
-        deal_name_lookup = dict(zip(
-            self.deals_df["deal_id"].astype(str),
-            self.deals_df["deal_name"],
-        ))
-
-        columns = [
-            # Association references
-            "Account_Name", "Contact_Name", "Deal_Name",
-            # Activity fields
-            "Activity_Type", "Subject", "Activity_Date",
-            "Duration", "Activity_Description", "Owner",
-        ]
-
-        rows = []
-        for _, act in self.activities_df.iterrows():
-            row = {c: "" for c in columns}
-
-            # Association references
-            row["Account_Name"] = account_name_lookup.get(str(act["account_id"]), "")
-            row["Contact_Name"] = contact_name_lookup.get(str(act["contact_id"]), "")
-            row["Deal_Name"] = deal_name_lookup.get(str(act["deal_id"]), "")
-
-            # Activity fields
-            raw_type = act["activity_type"]
-            row["Activity_Type"] = type_map.get(raw_type, raw_type)
-            row["Subject"] = act["subject"]
-            row["Activity_Date"] = act["activity_date"]
-            row["Duration"] = act["duration_minutes"] if act["duration_minutes"] else ""
-            row["Activity_Description"] = act["notes"] if act["notes"] else ""
-            row["Owner"] = self.format_owner(act["activity_owner"]) if act["activity_owner"] else ""
-
-            rows.append(row)
-
-        return pd.DataFrame(rows, columns=columns)
-
-    # ------------------------------------------------------------------ #
     #  Import guide                                                        #
     # ------------------------------------------------------------------ #
 
@@ -381,7 +323,7 @@ This file contains accounts, contacts, and deals. Each deal appears exactly once
    - **Deals** third → **Deals** module → Import → map `Deal_Name`, `Account_Name`, `Contact_Name`, and deal fields
 2. All name-based association fields (`Account_Name`, `Contact_Name`) are pre-populated on every row
 
-### Step 2: Import Activities (`zoho_master_activities.csv`)
+### Step 2: Import Activities (`zoho_activities.csv`)
 
 This file contains all activities, one per row, with name-based references to existing records.
 

@@ -176,8 +176,7 @@ class SalesforceExporter(BaseCRMExporter):
         """
         Generate Salesforce master records file.
 
-        Each opportunity appears exactly ONCE to prevent duplicates. Accounts
-        and contacts may repeat (Salesforce deduplicates by External_ID__c).
+        One row per contact. Deals appear once, on the row of their primary contact.
 
         Row structure:
         - Account-only rows: account fields filled, contact/opportunity blank
@@ -282,51 +281,6 @@ class SalesforceExporter(BaseCRMExporter):
         return pd.DataFrame(rows, columns=columns)
 
     # ------------------------------------------------------------------ #
-    #  Master activities file (one row per activity)                       #
-    # ------------------------------------------------------------------ #
-
-    def generate_master_activities(self) -> pd.DataFrame:
-        """
-        Generate Salesforce master activities file.
-
-        Each activity appears exactly once. Association columns reference
-        existing records by External_ID__c.
-        """
-        type_map = self.activity_type_mapping()
-
-        columns = [
-            # Association references
-            "Account_External_ID__c", "Contact_External_ID__c",
-            "Opportunity_External_ID__c",
-            # Activity fields
-            "Type", "Subject", "ActivityDate", "Status",
-            "DurationInMinutes", "Activity_Description", "Owner",
-        ]
-
-        rows = []
-        for _, act in self.activities_df.iterrows():
-            row = {c: "" for c in columns}
-
-            # Association references
-            row["Account_External_ID__c"] = f"ACC-{act['account_id']}"
-            row["Contact_External_ID__c"] = f"CON-{act['contact_id']}"
-            row["Opportunity_External_ID__c"] = f"OPP-{act['deal_id']}" if act["deal_id"] else ""
-
-            # Activity fields
-            raw_type = act["activity_type"]
-            row["Type"] = type_map.get(raw_type, raw_type)
-            row["Subject"] = act["subject"]
-            row["ActivityDate"] = act["activity_date"]
-            row["Status"] = act["completed"]
-            row["DurationInMinutes"] = act["duration_minutes"] if act["duration_minutes"] else ""
-            row["Activity_Description"] = act["notes"] if act["notes"] else ""
-            row["Owner"] = self.format_owner(act["activity_owner"]) if act["activity_owner"] else ""
-
-            rows.append(row)
-
-        return pd.DataFrame(rows, columns=columns)
-
-    # ------------------------------------------------------------------ #
     #  Import guide                                                        #
     # ------------------------------------------------------------------ #
 
@@ -387,7 +341,7 @@ This file contains accounts, contacts, and opportunities. Each opportunity appea
    - **Opportunities** third — map all three External IDs and opportunity fields
 2. All `External_ID__c` references are pre-populated on every row
 
-### Step 2: Import Activities (`salesforce_master_activities.csv`)
+### Step 2: Import Activities (`salesforce_activities.csv`)
 
 This file contains all activities, one per row, with External ID references to existing records.
 
