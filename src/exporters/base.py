@@ -90,11 +90,14 @@ class BaseCRMExporter(ABC):
         """
 
     @abstractmethod
-    def generate_master_file(self) -> pd.DataFrame:
-        """Generate a single denormalized master import file.
-        One Record Type column identifies each row (Company, Contact, Deal, Activity).
-        Association fields link child records to parents.
+    def generate_master_records(self) -> pd.DataFrame:
+        """Generate master records file (companies + contacts + deals).
+        Each deal appears exactly once. Companies/contacts may repeat for associations.
         """
+
+    @abstractmethod
+    def generate_master_activities(self) -> pd.DataFrame:
+        """Generate master activities file (one row per activity with association refs)."""
 
     @abstractmethod
     def generate_import_guide(self) -> str:
@@ -168,8 +171,9 @@ class BaseCRMExporter(ABC):
         name = self.crm_name().lower()
         files = {}
 
-        # Master import file (recommended for import)
-        files[f"{name}_master_import.csv"] = self.generate_master_file()
+        # Master import files (recommended for import)
+        files[f"{name}_master_records.csv"] = self.generate_master_records()
+        files[f"{name}_master_activities.csv"] = self.generate_master_activities()
 
         # Individual object files with association columns
         for filename, df in self.generate_association_files().items():

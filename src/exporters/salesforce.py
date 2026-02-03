@@ -169,48 +169,43 @@ class SalesforceExporter(BaseCRMExporter):
         return files
 
     # ------------------------------------------------------------------ #
-    #  Master import file                                                  #
+    #  Master records file (accounts + contacts + opportunities)           #
     # ------------------------------------------------------------------ #
 
-    def generate_master_file(self) -> pd.DataFrame:
+    def generate_master_records(self) -> pd.DataFrame:
         """
-        Generate a fully denormalized Salesforce master import file.
+        Generate Salesforce master records file.
 
-        Each row represents a complete relationship chain (account + contact +
-        opportunity + activity on one row). The CRM deduplicates by External_ID__c
-        fields. Activities are unique per row.
+        Each opportunity appears exactly ONCE to prevent duplicates. Accounts
+        and contacts may repeat (Salesforce deduplicates by External_ID__c).
+
+        Row structure:
+        - Account-only rows: account fields filled, contact/opportunity blank
+        - Account+Contact rows: account + contact filled, opportunity blank
+        - Account+Contact+Opportunity rows: all filled (one row per opportunity)
         """
-        type_map = self.activity_type_mapping()
-
-        # Master file column order — account → contact → opportunity → activity → owner
         columns = [
-            # Account fields (with External ID)
+            # Account fields
             "Account_External_ID__c", "Account_Name", "Industry",
             "NumberOfEmployees", "AnnualRevenue",
             "BillingStreet", "BillingCity", "BillingState",
             "BillingPostalCode", "BillingCountry", "Website",
-            # Contact fields (with External ID)
+            # Contact fields
             "Contact_External_ID__c", "Email", "FirstName", "LastName",
             "Title", "Phone", "Department",
-            # Opportunity fields (with External ID)
+            # Opportunity fields
             "Opportunity_External_ID__c", "Opportunity_Name", "StageName",
             "Amount", "CloseDate", "CreatedDate", "Status",
         ]
         has_subscription = "subscription_type" in self.profile.deal_fields
         if has_subscription:
             columns.append("Subscription_Type__c")
-        # Activity fields + owner
-        columns += [
-            "Type", "Subject", "ActivityDate", "DurationInMinutes",
-            "Activity_Description",
-            "Owner",
-        ]
+        columns.append("Owner")
 
         def _empty_row():
             return {c: "" for c in columns}
 
         def _fill_account(row, acc):
-            """Populate account columns on a row."""
             row["Account_External_ID__c"] = f"ACC-{acc['id']}"
             row["Account_Name"] = acc["company_name"]
             row["Industry"] = acc["industry"]
@@ -224,7 +219,6 @@ class SalesforceExporter(BaseCRMExporter):
             row["Website"] = acc["website"]
 
         def _fill_contact(row, con):
-            """Populate contact columns on a row."""
             row["Contact_External_ID__c"] = f"CON-{con['contact_id']}"
             row["Email"] = con["email"]
             row["FirstName"] = con["first_name"]
@@ -234,7 +228,6 @@ class SalesforceExporter(BaseCRMExporter):
             row["Department"] = con["department"]
 
         def _fill_opportunity(row, deal):
-            """Populate opportunity columns on a row."""
             row["Opportunity_External_ID__c"] = f"OPP-{deal['deal_id']}"
             row["Opportunity_Name"] = deal["deal_name"]
             row["StageName"] = deal["stage"]
@@ -246,17 +239,7 @@ class SalesforceExporter(BaseCRMExporter):
                 row["Subscription_Type__c"] = deal.get("subscription_type", "")
             row["Owner"] = self.format_owner(deal["deal_owner"]) if deal["deal_owner"] else ""
 
-        def _fill_activity(row, act):
-            """Populate activity columns on a row."""
-            row["Type"] = type_map.get(act["activity_type"], act["activity_type"])
-            row["Subject"] = act["subject"]
-            row["ActivityDate"] = act["activity_date"]
-            row["DurationInMinutes"] = act["duration_minutes"] if act["duration_minutes"] else ""
-            row["Activity_Description"] = act["notes"] if act["notes"] else ""
-            row["Owner"] = self.format_owner(act["activity_owner"]) if act["activity_owner"] else ""
-
-        # Build indexes: group contacts by account, deals by contact,
-        # activities by deal_id and by contact_id (non-deal)
+        # Build indexes
         contacts_by_account = {}
         for _, con in self.contacts_df.iterrows():
             contacts_by_account.setdefault(str(con["account_id"]), []).append(con)
@@ -265,17 +248,9 @@ class SalesforceExporter(BaseCRMExporter):
         for _, deal in self.deals_df.iterrows():
             deals_by_contact.setdefault(str(deal["contact_id"]), []).append(deal)
 
-        activities_by_deal = {}
-        activities_by_contact_no_deal = {}
-        for _, act in self.activities_df.iterrows():
-            if act["deal_id"]:
-                activities_by_deal.setdefault(str(act["deal_id"]), []).append(act)
-            else:
-                activities_by_contact_no_deal.setdefault(str(act["contact_id"]), []).append(act)
-
         rows = []
 
-        # Walk the relationship tree: account → contact → opportunity → activity
+        # Walk: account → contact → opportunity (each opportunity appears exactly once)
         for _, acc in self.accounts_df.iterrows():
             acc_id = str(acc["id"])
             acc_contacts = contacts_by_account.get(acc_id, [])
@@ -289,41 +264,65 @@ class SalesforceExporter(BaseCRMExporter):
             for con in acc_contacts:
                 con_id = str(con["contact_id"])
                 con_deals = deals_by_contact.get(con_id, [])
-                con_activities_no_deal = activities_by_contact_no_deal.get(con_id, [])
 
-                if not con_deals and not con_activities_no_deal:
+                if not con_deals:
                     row = _empty_row()
                     _fill_account(row, acc)
                     _fill_contact(row, con)
                     row["Owner"] = self.format_owner(con["contact_owner"]) if con["contact_owner"] else ""
                     rows.append(row)
-                    continue
-
-                for deal in con_deals:
-                    deal_id = str(deal["deal_id"])
-                    deal_activities = activities_by_deal.get(deal_id, [])
-
-                    if not deal_activities:
+                else:
+                    for deal in con_deals:
                         row = _empty_row()
                         _fill_account(row, acc)
                         _fill_contact(row, con)
                         _fill_opportunity(row, deal)
                         rows.append(row)
-                    else:
-                        for act in deal_activities:
-                            row = _empty_row()
-                            _fill_account(row, acc)
-                            _fill_contact(row, con)
-                            _fill_opportunity(row, deal)
-                            _fill_activity(row, act)
-                            rows.append(row)
 
-                for act in con_activities_no_deal:
-                    row = _empty_row()
-                    _fill_account(row, acc)
-                    _fill_contact(row, con)
-                    _fill_activity(row, act)
-                    rows.append(row)
+        return pd.DataFrame(rows, columns=columns)
+
+    # ------------------------------------------------------------------ #
+    #  Master activities file (one row per activity)                       #
+    # ------------------------------------------------------------------ #
+
+    def generate_master_activities(self) -> pd.DataFrame:
+        """
+        Generate Salesforce master activities file.
+
+        Each activity appears exactly once. Association columns reference
+        existing records by External_ID__c.
+        """
+        type_map = self.activity_type_mapping()
+
+        columns = [
+            # Association references
+            "Account_External_ID__c", "Contact_External_ID__c",
+            "Opportunity_External_ID__c",
+            # Activity fields
+            "Type", "Subject", "ActivityDate", "Status",
+            "DurationInMinutes", "Activity_Description", "Owner",
+        ]
+
+        rows = []
+        for _, act in self.activities_df.iterrows():
+            row = {c: "" for c in columns}
+
+            # Association references
+            row["Account_External_ID__c"] = f"ACC-{act['account_id']}"
+            row["Contact_External_ID__c"] = f"CON-{act['contact_id']}"
+            row["Opportunity_External_ID__c"] = f"OPP-{act['deal_id']}" if act["deal_id"] else ""
+
+            # Activity fields
+            raw_type = act["activity_type"]
+            row["Type"] = type_map.get(raw_type, raw_type)
+            row["Subject"] = act["subject"]
+            row["ActivityDate"] = act["activity_date"]
+            row["Status"] = act["completed"]
+            row["DurationInMinutes"] = act["duration_minutes"] if act["duration_minutes"] else ""
+            row["Activity_Description"] = act["notes"] if act["notes"] else ""
+            row["Owner"] = self.format_owner(act["activity_owner"]) if act["activity_owner"] else ""
+
+            rows.append(row)
 
         return pd.DataFrame(rows, columns=columns)
 
@@ -376,19 +375,25 @@ Add the following stage values to the Opportunity **StageName** picklist:
 
 ## Option A — Master File Import (Recommended)
 
-Use `salesforce_master_import.csv` — a fully denormalized file where each row contains account, contact, opportunity, and activity data together. The CRM automatically deduplicates:
-- **Accounts** are matched by `Account_External_ID__c` — the same account appearing on multiple rows is imported once
-- **Contacts** are matched by `Contact_External_ID__c` and automatically associated with the account on the same row
-- **Opportunities** are matched by `Opportunity_External_ID__c` and associated with the account and contact on the same row
-- **Activities** are created one per row and associated with the contact and opportunity on the same row
+Two files that cover all records and activities:
 
-**Steps:**
-1. Open **Data Loader** and import each object in order from `salesforce_master_import.csv`:
+### Step 1: Import Records (`salesforce_master_records.csv`)
+
+This file contains accounts, contacts, and opportunities. Each opportunity appears exactly once (preventing duplicates). Accounts and contacts are deduplicated by `External_ID__c`.
+
+1. Open **Data Loader** and import each object in order:
    - **Accounts** first — map `Account_External_ID__c`, `Account_Name`, and account fields
    - **Contacts** second — map `Contact_External_ID__c`, `Account_External_ID__c` (for lookup), and contact fields
    - **Opportunities** third — map all three External IDs and opportunity fields
-   - **Tasks/Events** last — map activity fields and External ID references for lookups
-2. All `External_ID__c` references are pre-populated — the same file serves all four imports
+2. All `External_ID__c` references are pre-populated on every row
+
+### Step 2: Import Activities (`salesforce_master_activities.csv`)
+
+This file contains all activities, one per row, with External ID references to existing records.
+
+1. Import **Tasks** (Type != "Event") — map `Account_External_ID__c`, `Contact_External_ID__c`, `Opportunity_External_ID__c` for lookups
+2. Import **Events** (Type = "Event") — same External ID mapping
+3. Activities are linked to records from Step 1 via External ID references
 
 ---
 

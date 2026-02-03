@@ -196,21 +196,21 @@ class HubSpotExporter(BaseCRMExporter):
         return files
 
     # ------------------------------------------------------------------ #
-    #  Master import file                                                  #
+    #  Master records file (companies + contacts + deals)                  #
     # ------------------------------------------------------------------ #
 
-    def generate_master_file(self) -> pd.DataFrame:
+    def generate_master_records(self) -> pd.DataFrame:
         """
-        Generate a fully denormalized HubSpot master import file.
+        Generate HubSpot master records file.
 
-        Each row represents a complete relationship chain (company + contact +
-        deal + activity on one row). The CRM deduplicates by domain (companies),
-        email (contacts), and deal name (deals). Activities are unique per row.
+        Each deal appears exactly ONCE to prevent duplicates. Companies and
+        contacts may repeat (HubSpot deduplicates by domain and email).
+
+        Row structure:
+        - Company-only rows: company fields filled, contact/deal blank
+        - Company+Contact rows: company + contact filled, deal blank
+        - Company+Contact+Deal rows: all filled (one row per deal)
         """
-        domain_lookup, email_lookup, deal_name_lookup = self._build_lookups()
-        type_map = self.activity_type_mapping()
-
-        # Master file column order — company → contact → deal → activity → owner
         columns = [
             # Company fields
             "Company Domain Name", "Company Name", "Industry",
@@ -226,24 +226,12 @@ class HubSpotExporter(BaseCRMExporter):
         has_subscription = "subscription_type" in self.profile.deal_fields
         if has_subscription:
             columns.append("Subscription Type")
-        # Activity fields + owner
-        columns += [
-            "Activity Type", "Activity Date", "Owner Email",
-            # Note columns
-            "Note Body",
-            # Email columns
-            "Email Subject", "Email Body", "Email Direction", "Email Status",
-            # Call columns
-            "Call Notes", "Call Duration", "Call Disposition", "Call Direction",
-            # Meeting columns
-            "Meeting Title", "Meeting Description", "Meeting Start", "Meeting End",
-        ]
+        columns.append("Owner Email")
 
         def _empty_row():
             return {c: "" for c in columns}
 
         def _fill_company(row, acc):
-            """Populate company columns on a row."""
             row["Company Domain Name"] = self._get_domain(acc["website"])
             row["Company Name"] = acc["company_name"]
             row["Industry"] = acc["industry"]
@@ -256,7 +244,6 @@ class HubSpotExporter(BaseCRMExporter):
             row["Country"] = acc["country"]
 
         def _fill_contact(row, con):
-            """Populate contact columns on a row."""
             row["Contact Email"] = con["email"]
             row["Contact First Name"] = con["first_name"]
             row["Contact Last Name"] = con["last_name"]
@@ -265,7 +252,6 @@ class HubSpotExporter(BaseCRMExporter):
             row["Contact Department"] = con["department"]
 
         def _fill_deal(row, deal):
-            """Populate deal columns on a row."""
             row["Deal Name"] = deal["deal_name"]
             row["Pipeline"] = deal["pipeline"]
             row["Deal Stage"] = deal["stage"]
@@ -277,12 +263,95 @@ class HubSpotExporter(BaseCRMExporter):
                 row["Subscription Type"] = deal.get("subscription_type", "")
             row["Owner Email"] = self.format_owner(deal["deal_owner"]) if deal["deal_owner"] else ""
 
-        def _fill_activity(row, act):
-            """Populate type-specific activity columns on a row."""
+        # Build indexes
+        contacts_by_account = {}
+        for _, con in self.contacts_df.iterrows():
+            contacts_by_account.setdefault(str(con["account_id"]), []).append(con)
+
+        deals_by_contact = {}
+        for _, deal in self.deals_df.iterrows():
+            deals_by_contact.setdefault(str(deal["contact_id"]), []).append(deal)
+
+        rows = []
+
+        # Walk: account → contact → deal (each deal appears exactly once)
+        for _, acc in self.accounts_df.iterrows():
+            acc_id = str(acc["id"])
+            acc_contacts = contacts_by_account.get(acc_id, [])
+
+            if not acc_contacts:
+                # Company with no contacts
+                row = _empty_row()
+                _fill_company(row, acc)
+                rows.append(row)
+                continue
+
+            for con in acc_contacts:
+                con_id = str(con["contact_id"])
+                con_deals = deals_by_contact.get(con_id, [])
+
+                if not con_deals:
+                    # Company + Contact (no deals)
+                    row = _empty_row()
+                    _fill_company(row, acc)
+                    _fill_contact(row, con)
+                    row["Owner Email"] = self.format_owner(con["contact_owner"]) if con["contact_owner"] else ""
+                    rows.append(row)
+                else:
+                    # One row per deal (deal appears exactly once)
+                    for deal in con_deals:
+                        row = _empty_row()
+                        _fill_company(row, acc)
+                        _fill_contact(row, con)
+                        _fill_deal(row, deal)
+                        rows.append(row)
+
+        return pd.DataFrame(rows, columns=columns)
+
+    # ------------------------------------------------------------------ #
+    #  Master activities file (one row per activity)                       #
+    # ------------------------------------------------------------------ #
+
+    def generate_master_activities(self) -> pd.DataFrame:
+        """
+        Generate HubSpot master activities file.
+
+        Each activity appears exactly once. Association columns reference
+        existing records by domain, email, and deal name.
+        """
+        domain_lookup, email_lookup, deal_name_lookup = self._build_lookups()
+        type_map = self.activity_type_mapping()
+
+        columns = [
+            # Association references
+            "Company Domain Name", "Contact Email", "Deal Name",
+            # Activity fields
+            "Activity Type", "Activity Date", "Owner Email",
+            # Note columns
+            "Note Body",
+            # Email columns
+            "Email Subject", "Email Body", "Email Direction", "Email Status",
+            # Call columns
+            "Call Notes", "Call Duration", "Call Disposition", "Call Direction",
+            # Meeting columns
+            "Meeting Title", "Meeting Description", "Meeting Start", "Meeting End",
+        ]
+
+        rows = []
+        for _, act in self.activities_df.iterrows():
+            row = {c: "" for c in columns}
+
+            # Association references
+            row["Company Domain Name"] = domain_lookup.get(str(act["account_id"]), "")
+            row["Contact Email"] = email_lookup.get(str(act["contact_id"]), "")
+            row["Deal Name"] = deal_name_lookup.get(str(act["deal_id"]), "")
+
+            # Common activity fields
             raw_type = act["activity_type"]
             row["Activity Type"] = type_map.get(raw_type, raw_type)
             row["Activity Date"] = act["activity_date"]
             row["Owner Email"] = self.format_owner(act["activity_owner"]) if act["activity_owner"] else ""
+
             # Type-specific columns
             row["Note Body"] = act["note_body"] if act["note_body"] else ""
             row["Email Subject"] = act["email_subject"] if act["email_subject"] else ""
@@ -298,81 +367,7 @@ class HubSpotExporter(BaseCRMExporter):
             row["Meeting Start"] = act["meeting_start_time"] if act["meeting_start_time"] else ""
             row["Meeting End"] = act["meeting_end_time"] if act["meeting_end_time"] else ""
 
-        # Build indexes: group contacts by account, deals by contact,
-        # activities by deal_id and by contact_id (non-deal)
-        contacts_by_account = {}
-        for _, con in self.contacts_df.iterrows():
-            contacts_by_account.setdefault(str(con["account_id"]), []).append(con)
-
-        deals_by_contact = {}
-        for _, deal in self.deals_df.iterrows():
-            deals_by_contact.setdefault(str(deal["contact_id"]), []).append(deal)
-
-        activities_by_deal = {}
-        activities_by_contact_no_deal = {}
-        for _, act in self.activities_df.iterrows():
-            if act["deal_id"]:
-                activities_by_deal.setdefault(str(act["deal_id"]), []).append(act)
-            else:
-                activities_by_contact_no_deal.setdefault(str(act["contact_id"]), []).append(act)
-
-        rows = []
-
-        # Walk the relationship tree: account → contact → deal → activity
-        for _, acc in self.accounts_df.iterrows():
-            acc_id = str(acc["id"])
-            acc_contacts = contacts_by_account.get(acc_id, [])
-
-            if not acc_contacts:
-                # Company with no contacts — one row with company only
-                row = _empty_row()
-                _fill_company(row, acc)
-                rows.append(row)
-                continue
-
-            for con in acc_contacts:
-                con_id = str(con["contact_id"])
-                con_deals = deals_by_contact.get(con_id, [])
-                con_activities_no_deal = activities_by_contact_no_deal.get(con_id, [])
-
-                if not con_deals and not con_activities_no_deal:
-                    # Contact with no deals and no activities
-                    row = _empty_row()
-                    _fill_company(row, acc)
-                    _fill_contact(row, con)
-                    row["Owner Email"] = self.format_owner(con["contact_owner"]) if con["contact_owner"] else ""
-                    rows.append(row)
-                    continue
-
-                # Process deals for this contact
-                for deal in con_deals:
-                    deal_id = str(deal["deal_id"])
-                    deal_activities = activities_by_deal.get(deal_id, [])
-
-                    if not deal_activities:
-                        # Deal with no activities
-                        row = _empty_row()
-                        _fill_company(row, acc)
-                        _fill_contact(row, con)
-                        _fill_deal(row, deal)
-                        rows.append(row)
-                    else:
-                        # One row per activity on this deal
-                        for act in deal_activities:
-                            row = _empty_row()
-                            _fill_company(row, acc)
-                            _fill_contact(row, con)
-                            _fill_deal(row, deal)
-                            _fill_activity(row, act)
-                            rows.append(row)
-
-                # Process non-deal activities for this contact
-                for act in con_activities_no_deal:
-                    row = _empty_row()
-                    _fill_company(row, acc)
-                    _fill_contact(row, con)
-                    _fill_activity(row, act)
-                    rows.append(row)
+            rows.append(row)
 
         return pd.DataFrame(rows, columns=columns)
 
@@ -413,23 +408,35 @@ Create the following pipelines in **Settings → Objects → Deals → Pipelines
 
 ## Option A — Master File Import (Recommended)
 
-Use `hubspot_master_import.csv` — a fully denormalized file where each row contains company, contact, deal, and activity data together. The CRM automatically deduplicates:
-- **Companies** are matched by domain — the same company appearing on multiple rows is imported once
-- **Contacts** are matched by email and automatically associated with the company on the same row
-- **Deals** are matched by deal name and associated with the company and contact on the same row
-- **Activities** are created one per row and associated with the contact and deal on the same row
+Two files that cover all records and activities:
 
-**Steps:**
+### Step 1: Import Records (`hubspot_master_records.csv`)
+
+This file contains companies, contacts, and deals. Each deal appears exactly once (preventing duplicates). Companies and contacts are deduplicated automatically.
+
 1. Go to **Contacts → Import** → **Start an import**
 2. Select **File from computer** → **One file** → **Multiple objects**
-3. Choose `hubspot_master_import.csv`
+3. Choose `hubspot_master_records.csv`
 4. Select object types: **Companies**, **Contacts**, **Deals**
-5. Map columns to HubSpot fields:
-   - **Company Domain Name** → Company domain (used for matching and association)
-   - **Contact Email** → Email (used for matching and association)
+5. Map columns:
+   - **Company Domain Name** → Company domain (matching + association)
+   - **Contact Email** → Email (matching + association)
    - **Deal Name** → Deal name
    - Map remaining fields to their HubSpot equivalents
-6. Complete the import — all records created with associations in one step
+6. Complete the import — all records created with proper associations
+
+### Step 2: Import Activities (`hubspot_master_activities.csv`)
+
+This file contains all activities, one per row, with association references to existing records.
+
+1. Go to **Contacts → Import** → **Start an import**
+2. Choose `hubspot_master_activities.csv`
+3. Map association columns:
+   - **Company Domain Name** → Company lookup
+   - **Contact Email** → Contact lookup
+   - **Deal Name** → Deal lookup
+4. Map activity fields (type-specific columns per activity type)
+5. Complete the import — activities linked to records from Step 1
 
 ---
 

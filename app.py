@@ -290,9 +290,10 @@ def main():
         ]
 
         # -------------------------------------------------------------- #
-        #  Generate master import file if CRM format selected             #
+        #  Generate CRM export files if CRM format selected               #
         # -------------------------------------------------------------- #
-        master_df = None
+        records_df = None
+        activities_master_df = None
         if export_format != "Standard CSV":
             exporter_map = {
                 "HubSpot": HubSpotExporter,
@@ -305,8 +306,10 @@ def main():
                 profile=profile,
             )
             crm_files = exporter.export()
-            master_key = [k for k in crm_files if "master_import" in k][0]
-            master_df = crm_files[master_key]
+            records_key = [k for k in crm_files if "master_records" in k][0]
+            activities_key = [k for k in crm_files if "master_activities" in k][0]
+            records_df = crm_files[records_key]
+            activities_master_df = crm_files[activities_key]
 
         # -------------------------------------------------------------- #
         #  Tabbed data preview                                            #
@@ -319,8 +322,9 @@ def main():
             f"Deals ({len(filtered_deals)})",
             f"Activities ({len(filtered_activities)})",
         ]
-        if master_df is not None:
-            tab_labels.append(f"Master Import ({len(master_df)} rows)")
+        if records_df is not None:
+            tab_labels.append(f"Master Records ({len(records_df)} rows)")
+            tab_labels.append(f"Master Activities ({len(activities_master_df)} rows)")
 
         tabs = st.tabs(tab_labels)
 
@@ -332,9 +336,11 @@ def main():
             st.dataframe(filtered_deals, use_container_width=True, hide_index=True)
         with tabs[3]:
             st.dataframe(filtered_activities, use_container_width=True, hide_index=True)
-        if master_df is not None:
+        if records_df is not None:
             with tabs[4]:
-                st.dataframe(master_df.head(25), use_container_width=True, hide_index=True)
+                st.dataframe(records_df.head(25), use_container_width=True, hide_index=True)
+            with tabs[5]:
+                st.dataframe(activities_master_df.head(25), use_container_width=True, hide_index=True)
 
         # -------------------------------------------------------------- #
         #  Summary statistics                                             #
@@ -448,16 +454,22 @@ def main():
                 "Create users/owners in your CRM before importing data."
             )
 
-            # --- Recommended: Master Import File ---
-            master_key = [k for k in crm_files if "master_import" in k][0]
-            master_df = crm_files[master_key]
-            st.markdown("**Recommended: Master Import File**")
-            st.download_button(
-                label=f"Download {master_key}",
-                data=master_df.to_csv(index=False),
-                file_name=master_key,
+            # --- Recommended: Master Import Files ---
+            st.markdown("**Recommended: Master Import Files**")
+            col_r, col_a = st.columns(2)
+            col_r.download_button(
+                label=f"Download {records_key}",
+                data=records_df.to_csv(index=False),
+                file_name=records_key,
                 mime="text/csv",
-                key="crm_dl_master",
+                key="crm_dl_records",
+            )
+            col_a.download_button(
+                label=f"Download {activities_key}",
+                data=activities_master_df.to_csv(index=False),
+                file_name=activities_key,
+                mime="text/csv",
+                key="crm_dl_activities",
             )
 
             # --- Individual Object Files (collapsible) ---
