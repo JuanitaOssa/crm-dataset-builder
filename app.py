@@ -290,26 +290,51 @@ def main():
         ]
 
         # -------------------------------------------------------------- #
+        #  Generate master import file if CRM format selected             #
+        # -------------------------------------------------------------- #
+        master_df = None
+        if export_format != "Standard CSV":
+            exporter_map = {
+                "HubSpot": HubSpotExporter,
+                "Salesforce": SalesforceExporter,
+                "Zoho": ZohoExporter,
+            }
+            ExporterClass = exporter_map[export_format]
+            exporter = ExporterClass(
+                accounts_df, contacts_df, filtered_deals, filtered_activities,
+                profile=profile,
+            )
+            crm_files = exporter.export()
+            master_key = [k for k in crm_files if "master_import" in k][0]
+            master_df = crm_files[master_key]
+
+        # -------------------------------------------------------------- #
         #  Tabbed data preview                                            #
         # -------------------------------------------------------------- #
         st.subheader("Data Preview")
-        tab_acc, tab_con, tab_deal, tab_act = st.tabs(
-            [
-                f"Accounts ({len(accounts_df)})",
-                f"Contacts ({len(contacts_df)})",
-                f"Deals ({len(filtered_deals)})",
-                f"Activities ({len(filtered_activities)})",
-            ]
-        )
 
-        with tab_acc:
+        tab_labels = [
+            f"Accounts ({len(accounts_df)})",
+            f"Contacts ({len(contacts_df)})",
+            f"Deals ({len(filtered_deals)})",
+            f"Activities ({len(filtered_activities)})",
+        ]
+        if master_df is not None:
+            tab_labels.append(f"Master Import ({len(master_df)} rows)")
+
+        tabs = st.tabs(tab_labels)
+
+        with tabs[0]:
             st.dataframe(accounts_df, use_container_width=True, hide_index=True)
-        with tab_con:
+        with tabs[1]:
             st.dataframe(contacts_df, use_container_width=True, hide_index=True)
-        with tab_deal:
+        with tabs[2]:
             st.dataframe(filtered_deals, use_container_width=True, hide_index=True)
-        with tab_act:
+        with tabs[3]:
             st.dataframe(filtered_activities, use_container_width=True, hide_index=True)
+        if master_df is not None:
+            with tabs[4]:
+                st.dataframe(master_df.head(25), use_container_width=True, hide_index=True)
 
         # -------------------------------------------------------------- #
         #  Summary statistics                                             #
@@ -417,19 +442,7 @@ def main():
                 mime="application/zip",
             )
         else:
-            # CRM-specific export
-            exporter_map = {
-                "HubSpot": HubSpotExporter,
-                "Salesforce": SalesforceExporter,
-                "Zoho": ZohoExporter,
-            }
-            ExporterClass = exporter_map[export_format]
-            exporter = ExporterClass(
-                accounts_df, contacts_df, filtered_deals, filtered_activities,
-                profile=profile,
-            )
-            crm_files = exporter.export()
-
+            # CRM-specific export (exporter and crm_files already created above)
             st.info(
                 f"**{export_format} format selected.** "
                 "Create users/owners in your CRM before importing data."
