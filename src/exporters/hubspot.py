@@ -79,12 +79,25 @@ class HubSpotExporter(BaseCRMExporter):
     def activity_field_mapping(self) -> Dict[str, str]:
         return {
             "activity_type": "hs_activity_type",
-            "subject": "hs_timestamp_subject",
             "activity_date": "hs_timestamp",
-            "completed": "hs_activity_status",
-            "duration_minutes": "hs_duration",
-            "notes": "hs_body",
             "activity_owner": "hubspot_owner_id",
+            # Note fields
+            "note_body": "hs_note_body",
+            # Email fields
+            "email_subject": "hs_email_subject",
+            "email_body": "hs_email_text",
+            "email_direction": "hs_email_direction",
+            "email_status": "hs_email_status",
+            # Call fields
+            "call_notes": "hs_call_body",
+            "call_duration": "hs_call_duration",
+            "call_disposition": "hs_call_disposition",
+            "call_direction": "hs_call_direction",
+            # Meeting fields
+            "meeting_title": "hs_meeting_title",
+            "meeting_description": "hs_meeting_body",
+            "meeting_start_time": "hs_meeting_start_time",
+            "meeting_end_time": "hs_meeting_end_time",
         }
 
     def activity_type_mapping(self) -> Dict[str, str]:
@@ -215,9 +228,15 @@ class HubSpotExporter(BaseCRMExporter):
             columns.append("Subscription Type")
         # Activity fields + owner
         columns += [
-            "Activity Type", "Activity Subject", "Activity Date",
-            "Activity Duration", "Activity Notes",
-            "Owner Email",
+            "Activity Type", "Activity Date", "Owner Email",
+            # Note columns
+            "Note Body",
+            # Email columns
+            "Email Subject", "Email Body", "Email Direction", "Email Status",
+            # Call columns
+            "Call Notes", "Call Duration", "Call Disposition", "Call Direction",
+            # Meeting columns
+            "Meeting Title", "Meeting Description", "Meeting Start", "Meeting End",
         ]
 
         def _empty_row():
@@ -259,13 +278,25 @@ class HubSpotExporter(BaseCRMExporter):
             row["Owner Email"] = self.format_owner(deal["deal_owner"]) if deal["deal_owner"] else ""
 
         def _fill_activity(row, act):
-            """Populate activity columns on a row."""
-            row["Activity Type"] = type_map.get(act["activity_type"], act["activity_type"])
-            row["Activity Subject"] = act["subject"]
+            """Populate type-specific activity columns on a row."""
+            raw_type = act["activity_type"]
+            row["Activity Type"] = type_map.get(raw_type, raw_type)
             row["Activity Date"] = act["activity_date"]
-            row["Activity Duration"] = act["duration_minutes"] if act["duration_minutes"] else ""
-            row["Activity Notes"] = act["notes"] if act["notes"] else ""
             row["Owner Email"] = self.format_owner(act["activity_owner"]) if act["activity_owner"] else ""
+            # Type-specific columns
+            row["Note Body"] = act["note_body"] if act["note_body"] else ""
+            row["Email Subject"] = act["email_subject"] if act["email_subject"] else ""
+            row["Email Body"] = act["email_body"] if act["email_body"] else ""
+            row["Email Direction"] = act["email_direction"] if act["email_direction"] else ""
+            row["Email Status"] = act["email_status"] if act["email_status"] else ""
+            row["Call Notes"] = act["call_notes"] if act["call_notes"] else ""
+            row["Call Duration"] = act["call_duration"] if act["call_duration"] else ""
+            row["Call Disposition"] = act["call_disposition"] if act["call_disposition"] else ""
+            row["Call Direction"] = act["call_direction"] if act["call_direction"] else ""
+            row["Meeting Title"] = act["meeting_title"] if act["meeting_title"] else ""
+            row["Meeting Description"] = act["meeting_description"] if act["meeting_description"] else ""
+            row["Meeting Start"] = act["meeting_start_time"] if act["meeting_start_time"] else ""
+            row["Meeting End"] = act["meeting_end_time"] if act["meeting_end_time"] else ""
 
         # Build indexes: group contacts by account, deals by contact,
         # activities by deal_id and by contact_id (non-deal)
@@ -431,24 +462,52 @@ Use individual files if you need more control over each object type.
 
 ---
 
+## Activity Column Layout
+
+Activities use type-specific columns. Each row populates only the columns matching its type:
+
+| Activity Type | Populated Columns |
+|--------------|-------------------|
+| NOTE | Note Body |
+| EMAIL | Email Subject, Email Body, Email Direction, Email Status |
+| CALL | Call Notes, Call Duration, Call Disposition, Call Direction |
+| MEETING | Meeting Title, Meeting Description, Meeting Start, Meeting End |
+
+All other activity columns on the row will be empty.
+
+---
+
 ## Field Mapping Reference
 
 | Generated Field | HubSpot Field |
 |----------------|---------------|
-| name / Company Name | Company name |
-| domain / Company Domain Name | Company domain name |
-| annualrevenue / Annual Revenue | Annual revenue |
-| numberofemployees / Employee Count | Number of employees |
-| firstname / Contact First Name | First name |
-| lastname / Contact Last Name | Last name |
-| email / Contact Email | Email |
-| jobtitle / Contact Title | Job title |
-| dealname / Deal Name | Deal name |
-| pipeline / Pipeline | Pipeline |
-| dealstage / Stage | Deal stage |
-| amount / Amount | Amount |
-| createdate / Created Date | Create date |
-| closedate / Close Date | Close date |
+| Company Domain Name | Company domain name |
+| Company Name | Company name |
+| Annual Revenue | Annual revenue |
+| Number of Employees | Number of employees |
+| Contact First Name | First name |
+| Contact Last Name | Last name |
+| Contact Email | Email |
+| Contact Title | Job title |
+| Deal Name | Deal name |
+| Pipeline | Pipeline |
+| Deal Stage | Deal stage |
+| Amount | Amount |
+| Create Date | Create date |
+| Close Date | Close date |
+| Note Body | Note body (`hs_note_body`) |
+| Email Subject | Email subject (`hs_email_subject`) |
+| Email Body | Email text (`hs_email_text`) |
+| Email Direction | Email direction (`hs_email_direction`) |
+| Email Status | Email status (`hs_email_status`) |
+| Call Notes | Call body (`hs_call_body`) |
+| Call Duration | Call duration (`hs_call_duration`) |
+| Call Disposition | Call disposition (`hs_call_disposition`) |
+| Call Direction | Call direction (`hs_call_direction`) |
+| Meeting Title | Meeting title (`hs_meeting_title`) |
+| Meeting Description | Meeting body (`hs_meeting_body`) |
+| Meeting Start | Meeting start time (`hs_meeting_start_time`) |
+| Meeting End | Meeting end time (`hs_meeting_end_time`) |
 
 ## Data Quality Notes
 - **Company Domain Name** contains clean domains (e.g., `clouddata.io`) — consistent across all files

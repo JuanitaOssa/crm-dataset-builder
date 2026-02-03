@@ -326,4 +326,9 @@ class BaseProfile(ABC):
             "activity_id", "activity_type", "subject", "activity_date",
             "account_id", "contact_id", "deal_id", "completed",
             "duration_minutes", "notes", "activity_owner",
+            # Type-specific fields
+            "note_body",
+            "email_subject", "email_body", "email_direction", "email_status",
+            "call_notes", "call_duration", "call_disposition", "call_direction",
+            "meeting_title", "meeting_description", "meeting_start_time", "meeting_end_time",
         ]

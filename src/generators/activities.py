@@ -18,20 +18,11 @@ class Activity:
     """
     Represents a CRM activity/touchpoint.
 
-    Attributes:
-        activity_id: Unique sequential identifier
-        activity_type: Activity type (e.g. Email, Phone Call, Meeting)
-        subject: Short description of the activity
-        activity_date: When the activity occurred (YYYY-MM-DD)
-        account_id: Foreign key to accounts CSV
-        contact_id: Foreign key to contacts CSV
-        deal_id: Foreign key to deals CSV (empty string for non-deal activities)
-        completed: Whether the activity is completed ("Yes" or "No")
-        duration_minutes: Duration in minutes (empty string for some types)
-        notes: Brief notes about the activity
-        activity_owner: Sales rep who performed the activity
+    Core fields are populated for every activity. Type-specific fields are
+    populated only when the activity_type matches (others stay "").
     """
 
+    # Core fields (always populated)
     activity_id: int
     activity_type: str
     subject: str
@@ -43,6 +34,21 @@ class Activity:
     duration_minutes: str    # int-as-string when applicable, "" otherwise
     notes: str
     activity_owner: str
+
+    # Type-specific fields (populated only for matching activity_type)
+    note_body: str = ""
+    email_subject: str = ""
+    email_body: str = ""
+    email_direction: str = ""
+    email_status: str = ""
+    call_notes: str = ""
+    call_duration: str = ""
+    call_disposition: str = ""
+    call_direction: str = ""
+    meeting_title: str = ""
+    meeting_description: str = ""
+    meeting_start_time: str = ""
+    meeting_end_time: str = ""
 
 
 class ActivityGenerator:
@@ -97,11 +103,13 @@ class ActivityGenerator:
         self.contacts = self._load_contacts(contacts_csv_path)
         self.deals = self._load_deals(deals_csv_path)
 
-        # Build contacts-by-account lookup
+        # Build contacts-by-account and contacts-by-id lookups
         self.contacts_by_account: Dict[int, List[dict]] = {}
+        self.contacts_by_id: Dict[int, dict] = {}
         for c in self.contacts:
             aid = int(c["account_id"])
             self.contacts_by_account.setdefault(aid, []).append(c)
+            self.contacts_by_id[int(c["contact_id"])] = c
 
         # Build deals-by-account lookup
         self.deals_by_account: Dict[int, List[dict]] = {}
@@ -245,6 +253,116 @@ class ActivityGenerator:
         return max(2, round(base_count * multiplier))
 
     # ------------------------------------------------------------------ #
+    #  Type-specific field generators                                     #
+    # ------------------------------------------------------------------ #
+
+    EMAIL_BODY_TEMPLATES = [
+        "Hi {first_name},\n\nI wanted to follow up on {subject}. Let me know if you have any questions.\n\nBest regards",
+        "Hi {first_name},\n\nThank you for your time. I'm sending over the {subject} for your review.\n\nBest",
+        "Hi {first_name},\n\nJust circling back on {subject}. Would love to schedule some time to discuss next steps.\n\nThanks",
+        "Hi {first_name},\n\nGreat speaking with you earlier. As discussed, here are the details regarding {subject}.\n\nRegards",
+        "Hi {first_name},\n\nI hope this finds you well. Sharing some information about {subject}.\n\nBest regards",
+        "Hi {first_name},\n\nFollowing up on our conversation about {subject}. Please find the requested information below.\n\nThanks",
+    ]
+
+    NOTE_BODY_TEMPLATES = [
+        "{subject} - logged by {owner}.",
+        "Internal note: {subject}. Follow-up required.",
+        "{subject}. Key takeaway documented for team reference.",
+        "Note regarding {subject}. See CRM history for context.",
+        "{subject} - important context for upcoming discussions.",
+    ]
+
+    CALL_DISPOSITIONS = [
+        ("Connected", 40),
+        ("Left Voicemail", 25),
+        ("No Answer", 15),
+        ("Busy", 10),
+        ("Wrong Number", 5),
+        ("Gatekeeper", 5),
+    ]
+
+    MEETING_HOURS = list(range(8, 17))
+
+    def _generate_email_body(self, contact_id: int, subject: str) -> str:
+        contact = self.contacts_by_id.get(contact_id, {})
+        first_name = contact.get("first_name", "there")
+        template = random.choice(self.EMAIL_BODY_TEMPLATES)
+        return template.format(first_name=first_name, subject=subject.lower())
+
+    def _generate_email_fields(self) -> tuple:
+        """Return (direction, status)."""
+        direction = random.choices(
+            ["OUTBOUND", "INBOUND"], weights=[75, 25], k=1
+        )[0]
+        if direction == "OUTBOUND":
+            status = random.choices(
+                ["SENT", "OPENED", "REPLIED", "BOUNCED"],
+                weights=[40, 30, 25, 5], k=1,
+            )[0]
+        else:
+            status = "RECEIVED"
+        return direction, status
+
+    def _generate_call_fields(self) -> tuple:
+        """Return (disposition, direction)."""
+        dispositions, weights = zip(*self.CALL_DISPOSITIONS)
+        disposition = random.choices(dispositions, weights=weights, k=1)[0]
+        direction = random.choices(
+            ["OUTBOUND", "INBOUND"], weights=[80, 20], k=1
+        )[0]
+        return disposition, direction
+
+    def _generate_meeting_times(self, activity_date: str, duration_minutes: str) -> tuple:
+        """Return (start_iso, end_iso) as ISO datetime strings."""
+        date_obj = datetime.date.fromisoformat(activity_date)
+        hour = random.choice(self.MEETING_HOURS)
+        minute = random.choice([0, 15, 30, 45])
+        start_dt = datetime.datetime(
+            date_obj.year, date_obj.month, date_obj.day, hour, minute
+        )
+        dur = int(duration_minutes) if duration_minutes else 30
+        end_dt = start_dt + datetime.timedelta(minutes=dur)
+        return start_dt.strftime("%Y-%m-%dT%H:%M:%S"), end_dt.strftime("%Y-%m-%dT%H:%M:%S")
+
+    def _generate_note_body(self, subject: str, owner: str) -> str:
+        template = random.choice(self.NOTE_BODY_TEMPLATES)
+        return template.format(subject=subject, owner=owner)
+
+    def _fill_type_specific_fields(
+        self, activity_type: str, subject: str, activity_date: str,
+        duration: str, contact_id: int, owner: str,
+    ) -> dict:
+        """Return dict of type-specific field values for the given activity type."""
+        fields = {}
+
+        if activity_type in ("Note", "LinkedIn"):
+            fields["note_body"] = self._generate_note_body(subject, owner)
+
+        elif activity_type == "Email":
+            direction, status = self._generate_email_fields()
+            fields["email_subject"] = subject
+            fields["email_body"] = self._generate_email_body(contact_id, subject)
+            fields["email_direction"] = direction
+            fields["email_status"] = status
+
+        elif activity_type == "Phone Call":
+            disposition, direction = self._generate_call_fields()
+            fields["call_notes"] = f"{subject} - {disposition.lower()}"
+            fields["call_duration"] = duration
+            fields["call_disposition"] = disposition
+            fields["call_direction"] = direction
+
+        elif activity_type == "Meeting":
+            start_time, end_time = self._generate_meeting_times(activity_date, duration)
+            fields["meeting_title"] = subject
+            fields["meeting_description"] = f"Meeting: {subject}"
+            fields["meeting_start_time"] = start_time
+            fields["meeting_end_time"] = end_time
+
+        return fields
+
+    # ------------------------------------------------------------------ #
     #  Core three-phase generation                                        #
     # ------------------------------------------------------------------ #
 
@@ -320,6 +438,11 @@ class ActivityGenerator:
                 else:
                     contact_id = cid
 
+                duration = self._generate_duration(activity_type)
+                type_fields = self._fill_type_specific_fields(
+                    activity_type, subject, act_date.isoformat(),
+                    duration, contact_id, owner,
+                )
                 activities.append(Activity(
                     activity_id=0,
                     activity_type=activity_type,
@@ -329,9 +452,10 @@ class ActivityGenerator:
                     contact_id=contact_id,
                     deal_id=str(deal_id),
                     completed=self._pick_completed(act_date),
-                    duration_minutes=self._generate_duration(activity_type),
+                    duration_minutes=duration,
                     notes="",
                     activity_owner=owner,
+                    **type_fields,
                 ))
 
         # ============================================================== #
@@ -365,6 +489,11 @@ class ActivityGenerator:
                     self.DATE_RANGE_START, self.DATE_RANGE_END
                 )
 
+                duration = self._generate_duration(activity_type)
+                type_fields = self._fill_type_specific_fields(
+                    activity_type, subject, act_date.isoformat(),
+                    duration, contact_id, owner,
+                )
                 activities.append(Activity(
                     activity_id=0,
                     activity_type=activity_type,
@@ -374,9 +503,10 @@ class ActivityGenerator:
                     contact_id=contact_id,
                     deal_id="",
                     completed=self._pick_completed(act_date),
-                    duration_minutes=self._generate_duration(activity_type),
+                    duration_minutes=duration,
                     notes="",
                     activity_owner=owner,
+                    **type_fields,
                 ))
 
         # --- 2b: Accounts WITHOUT deals — ~50% get initial outreach ---
@@ -416,6 +546,11 @@ class ActivityGenerator:
                     self.DATE_RANGE_START, self.DATE_RANGE_END
                 )
 
+                duration = self._generate_duration(activity_type)
+                type_fields = self._fill_type_specific_fields(
+                    activity_type, subject, act_date.isoformat(),
+                    duration, contact_id, owner,
+                )
                 activities.append(Activity(
                     activity_id=0,
                     activity_type=activity_type,
@@ -425,9 +560,10 @@ class ActivityGenerator:
                     contact_id=contact_id,
                     deal_id="",
                     completed=self._pick_completed(act_date),
-                    duration_minutes=self._generate_duration(activity_type),
+                    duration_minutes=duration,
                     notes="",
                     activity_owner=owner,
+                    **type_fields,
                 ))
 
         # ============================================================== #
