@@ -165,6 +165,132 @@ class ZohoExporter(BaseCRMExporter):
         return files
 
     # ------------------------------------------------------------------ #
+    #  Master import file                                                  #
+    # ------------------------------------------------------------------ #
+
+    def generate_master_file(self) -> pd.DataFrame:
+        """
+        Generate a single denormalized Zoho master import file.
+
+        Each row has a Record Type (Account, Contact, Deal, Activity) and
+        only populates the columns relevant to that record type. Name-based
+        fields (Account_Name, Contact_Name, Deal_Name) link records.
+        """
+        # Build lookups
+        account_name_lookup = dict(zip(
+            self.accounts_df["id"].astype(str),
+            self.accounts_df["company_name"],
+        ))
+        contact_name_lookup = dict(zip(
+            self.contacts_df["contact_id"].astype(str),
+            self.contacts_df["first_name"] + " " + self.contacts_df["last_name"],
+        ))
+        deal_name_lookup = dict(zip(
+            self.deals_df["deal_id"].astype(str),
+            self.deals_df["deal_name"],
+        ))
+
+        # Master file column order
+        columns = [
+            "Record Type",
+            # Account fields
+            "Account_Name", "Industry", "Annual_Revenue", "Employees",
+            "Billing_Street", "Billing_City", "Billing_State", "Billing_Code",
+            "Billing_Country", "Website", "Account_Description",
+            # Contact fields
+            "Email", "First_Name", "Last_Name", "Title", "Phone", "Department",
+            # Deal fields
+            "Deal_Name", "Pipeline", "Stage", "Amount",
+            "Created_Time", "Closing_Date", "Status",
+            # Association
+            "Contact_Name",
+            # Activity fields
+            "Activity_Type", "Subject", "Activity_Date", "Duration",
+            "Activity_Description",
+            # Owner (shared)
+            "Owner",
+        ]
+
+        # Check if subscription_type is in this profile's deal fields
+        has_subscription = "subscription_type" in self.profile.deal_fields
+        if has_subscription:
+            idx = columns.index("Status") + 1
+            columns.insert(idx, "Subscription_Type")
+
+        def _empty_row():
+            return {c: "" for c in columns}
+
+        rows = []
+
+        # --- Account rows ---
+        for _, acc in self.accounts_df.iterrows():
+            row = _empty_row()
+            row["Record Type"] = "Account"
+            row["Account_Name"] = acc["company_name"]
+            row["Industry"] = acc["industry"]
+            row["Annual_Revenue"] = acc["annual_revenue"]
+            row["Employees"] = acc["employee_count"]
+            row["Billing_Street"] = acc["street_address"]
+            row["Billing_City"] = acc["city"]
+            row["Billing_State"] = acc["state"]
+            row["Billing_Code"] = acc["zip_code"]
+            row["Billing_Country"] = acc["country"]
+            row["Website"] = acc["website"]
+            row["Account_Description"] = acc.get("description", "")
+            rows.append(row)
+
+        # --- Contact rows ---
+        for _, con in self.contacts_df.iterrows():
+            row = _empty_row()
+            row["Record Type"] = "Contact"
+            row["Account_Name"] = account_name_lookup.get(str(con["account_id"]), "")
+            row["Email"] = con["email"]
+            row["First_Name"] = con["first_name"]
+            row["Last_Name"] = con["last_name"]
+            row["Title"] = con["title"]
+            row["Phone"] = con["phone"]
+            row["Department"] = con["department"]
+            row["Owner"] = self.format_owner(con["contact_owner"]) if con["contact_owner"] else ""
+            rows.append(row)
+
+        # --- Deal rows ---
+        for _, deal in self.deals_df.iterrows():
+            row = _empty_row()
+            row["Record Type"] = "Deal"
+            row["Account_Name"] = account_name_lookup.get(str(deal["account_id"]), "")
+            row["Contact_Name"] = contact_name_lookup.get(str(deal["contact_id"]), "")
+            row["Deal_Name"] = deal["deal_name"]
+            row["Pipeline"] = deal["pipeline"]
+            row["Stage"] = deal["stage"]
+            row["Amount"] = deal["amount"]
+            row["Created_Time"] = deal["created_date"]
+            row["Closing_Date"] = deal["close_date"]
+            row["Status"] = deal["deal_status"]
+            if has_subscription:
+                row["Subscription_Type"] = deal.get("subscription_type", "")
+            row["Owner"] = self.format_owner(deal["deal_owner"]) if deal["deal_owner"] else ""
+            rows.append(row)
+
+        # --- Activity rows ---
+        type_map = self.activity_type_mapping()
+        for _, act in self.activities_df.iterrows():
+            row = _empty_row()
+            row["Record Type"] = "Activity"
+            row["Account_Name"] = account_name_lookup.get(str(act["account_id"]), "")
+            row["Contact_Name"] = contact_name_lookup.get(str(act["contact_id"]), "")
+            deal_id = str(act["deal_id"]) if act["deal_id"] else ""
+            row["Deal_Name"] = deal_name_lookup.get(deal_id, "")
+            row["Activity_Type"] = type_map.get(act["activity_type"], act["activity_type"])
+            row["Subject"] = act["subject"]
+            row["Activity_Date"] = act["activity_date"]
+            row["Duration"] = act["duration_minutes"] if act["duration_minutes"] else ""
+            row["Activity_Description"] = act["notes"] if act["notes"] else ""
+            row["Owner"] = self.format_owner(act["activity_owner"]) if act["activity_owner"] else ""
+            rows.append(row)
+
+        return pd.DataFrame(rows, columns=columns)
+
+    # ------------------------------------------------------------------ #
     #  Import guide                                                        #
     # ------------------------------------------------------------------ #
 
@@ -188,7 +314,7 @@ class ZohoExporter(BaseCRMExporter):
 
 ## Prerequisites
 
-1. **Create users** in Zoho CRM matching the emails in `zoho_users.csv`:
+1. **Create users** in Zoho CRM matching the emails in `zoho_users_reference.csv`:
 {users_list}
 2. Ensure you have **admin access** to the Zoho CRM account
 
@@ -197,9 +323,29 @@ class ZohoExporter(BaseCRMExporter):
 Create the following pipelines in **Setup → Customization → Pipelines**:
 {pipeline_section}
 
-## Import Order
+---
 
-Import files in this exact order to preserve relationships:
+## Option A — Master File Import (Recommended)
+
+Use `zoho_master_import.csv` for the simplest experience with all associations pre-linked.
+
+1. Filter `zoho_master_import.csv` by **Record Type** and import each object in order:
+   - **Accounts** first (Record Type = "Account") → **Accounts** module → Import
+   - **Contacts** second (Record Type = "Contact") → **Contacts** module → Import
+     - Map `Account_Name` for account association (Zoho matches by name)
+   - **Deals** third (Record Type = "Deal") → **Deals** module → Import
+     - Map `Account_Name` and `Contact_Name` for associations
+   - **Activities** last (Record Type = "Activity") → Import by Activity_Type:
+     - Calls → **Activities → Calls**
+     - Meetings → **Activities → Meetings**
+     - Emails/Notes → **Notes** module
+2. All name-based association fields (`Account_Name`, `Contact_Name`, `Deal_Name`) are pre-populated
+
+---
+
+## Option B — Individual Files (Advanced)
+
+Use individual files if you need more control over each object type.
 
 ### Step 1: Import Accounts
 1. Go to **Accounts** module
@@ -243,6 +389,8 @@ Import files in this exact order to preserve relationships:
 3. For **Emails/Notes**: Import remaining as Notes
    - Go to module and import with account/contact lookup
 
+---
+
 ## Field Mapping Reference
 
 | Generated Field | Zoho Field |
@@ -258,6 +406,7 @@ Import files in this exact order to preserve relationships:
 | Stage | Stage |
 | Amount | Amount |
 | Closing_Date | Closing Date |
+| Contact_Name | Contact Name |
 
 ## Data Quality Notes
 - Zoho uses **name-based matching** — `Account_Name` and `Contact_Name` must match exactly. Import accounts first so lookups succeed.
@@ -266,5 +415,5 @@ Import files in this exact order to preserve relationships:
 - The `Owner` field maps to Zoho user emails — create users before importing
 - Activity types are mapped to Zoho modules: Calls, Meetings, and Notes
 - Deals require a `Closing_Date`; open deals use an estimated future date
-- The `zoho_users.csv` file lists all sales reps — create these as users in Zoho CRM before importing data
+- The `zoho_users_reference.csv` file lists all sales reps — create these as users in Zoho CRM before importing data
 """

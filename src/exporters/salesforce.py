@@ -169,6 +169,122 @@ class SalesforceExporter(BaseCRMExporter):
         return files
 
     # ------------------------------------------------------------------ #
+    #  Master import file                                                  #
+    # ------------------------------------------------------------------ #
+
+    def generate_master_file(self) -> pd.DataFrame:
+        """
+        Generate a single denormalized Salesforce master import file.
+
+        Each row has a Record Type (Account, Contact, Opportunity, Task) and
+        only populates the columns relevant to that record type. External_ID__c
+        fields link records across objects.
+        """
+        # Master file column order — prefixed names avoid Salesforce collisions
+        # (Name is used for both Account and Opportunity, Description for both)
+        columns = [
+            "Record Type",
+            # External ID references
+            "External_ID__c", "Account_External_ID__c",
+            "Contact_External_ID__c", "Opportunity_External_ID__c",
+            # Account fields
+            "Account_Name", "Industry", "AnnualRevenue", "NumberOfEmployees",
+            "BillingStreet", "BillingCity", "BillingState", "BillingPostalCode",
+            "BillingCountry", "Website", "Account_Description",
+            # Contact fields
+            "Email", "FirstName", "LastName", "Title", "Phone", "Department",
+            # Opportunity fields
+            "Opportunity_Name", "StageName", "Amount",
+            "CreatedDate", "CloseDate", "Status",
+            # Activity fields
+            "Type", "Subject", "ActivityDate", "DurationInMinutes",
+            "Activity_Description",
+            # Owner (shared)
+            "Owner",
+        ]
+
+        # Check if subscription_type is in this profile's deal fields
+        has_subscription = "subscription_type" in self.profile.deal_fields
+        if has_subscription:
+            idx = columns.index("Status") + 1
+            columns.insert(idx, "Subscription_Type__c")
+
+        def _empty_row():
+            return {c: "" for c in columns}
+
+        rows = []
+
+        # --- Account rows ---
+        for _, acc in self.accounts_df.iterrows():
+            row = _empty_row()
+            row["Record Type"] = "Account"
+            row["External_ID__c"] = f"ACC-{acc['id']}"
+            row["Account_Name"] = acc["company_name"]
+            row["Industry"] = acc["industry"]
+            row["AnnualRevenue"] = acc["annual_revenue"]
+            row["NumberOfEmployees"] = acc["employee_count"]
+            row["BillingStreet"] = acc["street_address"]
+            row["BillingCity"] = acc["city"]
+            row["BillingState"] = acc["state"]
+            row["BillingPostalCode"] = acc["zip_code"]
+            row["BillingCountry"] = acc["country"]
+            row["Website"] = acc["website"]
+            row["Account_Description"] = acc.get("description", "")
+            rows.append(row)
+
+        # --- Contact rows ---
+        for _, con in self.contacts_df.iterrows():
+            row = _empty_row()
+            row["Record Type"] = "Contact"
+            row["External_ID__c"] = f"CON-{con['contact_id']}"
+            row["Account_External_ID__c"] = f"ACC-{con['account_id']}"
+            row["Email"] = con["email"]
+            row["FirstName"] = con["first_name"]
+            row["LastName"] = con["last_name"]
+            row["Title"] = con["title"]
+            row["Phone"] = con["phone"]
+            row["Department"] = con["department"]
+            row["Owner"] = self.format_owner(con["contact_owner"]) if con["contact_owner"] else ""
+            rows.append(row)
+
+        # --- Opportunity rows ---
+        for _, deal in self.deals_df.iterrows():
+            row = _empty_row()
+            row["Record Type"] = "Opportunity"
+            row["External_ID__c"] = f"OPP-{deal['deal_id']}"
+            row["Account_External_ID__c"] = f"ACC-{deal['account_id']}"
+            row["Contact_External_ID__c"] = f"CON-{deal['contact_id']}"
+            row["Opportunity_Name"] = deal["deal_name"]
+            row["StageName"] = deal["stage"]
+            row["Amount"] = deal["amount"]
+            row["CreatedDate"] = deal["created_date"]
+            row["CloseDate"] = deal["close_date"]
+            row["Status"] = deal["deal_status"]
+            if has_subscription:
+                row["Subscription_Type__c"] = deal.get("subscription_type", "")
+            row["Owner"] = self.format_owner(deal["deal_owner"]) if deal["deal_owner"] else ""
+            rows.append(row)
+
+        # --- Task/Event rows (activities) ---
+        type_map = self.activity_type_mapping()
+        for _, act in self.activities_df.iterrows():
+            row = _empty_row()
+            row["Record Type"] = "Task"
+            row["Account_External_ID__c"] = f"ACC-{act['account_id']}"
+            row["Contact_External_ID__c"] = f"CON-{act['contact_id']}"
+            if act["deal_id"]:
+                row["Opportunity_External_ID__c"] = f"OPP-{act['deal_id']}"
+            row["Type"] = type_map.get(act["activity_type"], act["activity_type"])
+            row["Subject"] = act["subject"]
+            row["ActivityDate"] = act["activity_date"]
+            row["DurationInMinutes"] = act["duration_minutes"] if act["duration_minutes"] else ""
+            row["Activity_Description"] = act["notes"] if act["notes"] else ""
+            row["Owner"] = self.format_owner(act["activity_owner"]) if act["activity_owner"] else ""
+            rows.append(row)
+
+        return pd.DataFrame(rows, columns=columns)
+
+    # ------------------------------------------------------------------ #
     #  Import guide                                                        #
     # ------------------------------------------------------------------ #
 
@@ -201,7 +317,7 @@ class SalesforceExporter(BaseCRMExporter):
 
 ## Prerequisites
 
-1. **Create users** in Salesforce matching the usernames in `salesforce_users.csv`:
+1. **Create users** in Salesforce matching the usernames in `salesforce_users_reference.csv`:
 {users_list}
 2. Create a custom text field **`External_ID__c`** on Account, Contact, and Opportunity objects
    - Mark it as **External ID** and **Unique**
@@ -213,9 +329,27 @@ Add the following stage values to the Opportunity **StageName** picklist:
 {pipeline_section}
 {multi_pipeline_note}
 
-## Import Order
+---
 
-Import files in this exact order using **Data Loader** or **Data Import Wizard**:
+## Option A — Master File Import (Recommended)
+
+Use `salesforce_master_import.csv` for the simplest experience with all associations pre-linked.
+
+1. Open **Data Loader**
+2. Choose `salesforce_master_import.csv`
+3. The **Record Type** column identifies each row: Account, Contact, Opportunity, or Task
+4. Filter by Record Type and import each object type in order:
+   - **Accounts** first (Record Type = "Account")
+   - **Contacts** second (Record Type = "Contact") — use `Account_External_ID__c` for account lookup
+   - **Opportunities** third (Record Type = "Opportunity") — use `Account_External_ID__c` and `Contact_External_ID__c`
+   - **Tasks** last (Record Type = "Task") — use all External ID references
+5. All `External_ID__c` references are pre-populated for cross-object linking
+
+---
+
+## Option B — Individual Files (Advanced)
+
+Use individual files if you need more control over each object type.
 
 ### Step 1: Import Accounts
 1. Open **Data Loader** (or Setup → Data Import Wizard)
@@ -256,11 +390,14 @@ Import files in this exact order using **Data Loader** or **Data Import Wizard**
 3. Import each subset to the appropriate object
 4. Use `Account_External_ID__c` and `Contact_External_ID__c` for lookups
 
+---
+
 ## Field Mapping Reference
 
 | Generated Field | Salesforce Field |
 |----------------|-----------------|
-| Name | Account Name / Opportunity Name |
+| Account_Name / Name | Account Name |
+| Opportunity_Name / Name | Opportunity Name |
 | External_ID__c | External ID (custom) |
 | AnnualRevenue | Annual Revenue |
 | NumberOfEmployees | Employees |
@@ -279,5 +416,5 @@ Import files in this exact order using **Data Loader** or **Data Import Wizard**
 - The `Owner` field maps to Salesforce usernames — assign via Data Loader's owner lookup
 - Meetings map to Events; Calls, LinkedIn, and Notes map to Tasks
 - **Stage values must match** your Salesforce org's picklist exactly — configure them in the Pipeline Setup step above
-- The `salesforce_users.csv` file lists all sales reps — create these as users in Salesforce before importing data
+- The `salesforce_users_reference.csv` file lists all sales reps — create these as users in Salesforce before importing data
 """

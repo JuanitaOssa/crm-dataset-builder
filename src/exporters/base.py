@@ -85,8 +85,15 @@ class BaseCRMExporter(ABC):
 
     @abstractmethod
     def generate_association_files(self) -> Dict[str, pd.DataFrame]:
-        """Generate CRM-specific association/relationship files.
+        """Generate CRM-specific individual object files with association columns.
         Returns dict of filename -> DataFrame.
+        """
+
+    @abstractmethod
+    def generate_master_file(self) -> pd.DataFrame:
+        """Generate a single denormalized master import file.
+        One Record Type column identifies each row (Company, Contact, Deal, Activity).
+        Association fields link child records to parents.
         """
 
     @abstractmethod
@@ -161,12 +168,15 @@ class BaseCRMExporter(ABC):
         name = self.crm_name().lower()
         files = {}
 
-        # CRM-specific data files (entities + associations)
+        # Master import file (recommended for import)
+        files[f"{name}_master_import.csv"] = self.generate_master_file()
+
+        # Individual object files with association columns
         for filename, df in self.generate_association_files().items():
             files[filename] = df
 
         # Users reference file
-        files[f"{name}_users.csv"] = self.generate_users_file()
+        files[f"{name}_users_reference.csv"] = self.generate_users_file()
 
         # Import guide
         files[f"IMPORT_GUIDE_{name.upper()}.md"] = self.generate_import_guide()

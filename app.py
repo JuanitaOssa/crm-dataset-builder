@@ -435,20 +435,36 @@ def main():
                 "Create users/owners in your CRM before importing data."
             )
 
-            # Individual file downloads
-            csv_files = {k: v for k, v in crm_files.items() if k.endswith(".csv")}
-            cols = st.columns(min(len(csv_files), 4))
-            for i, (filename, df) in enumerate(csv_files.items()):
-                col_idx = i % min(len(csv_files), 4)
-                cols[col_idx].download_button(
-                    label=filename,
-                    data=df.to_csv(index=False),
-                    file_name=filename,
-                    mime="text/csv",
-                    key=f"crm_dl_{filename}",
-                )
+            # --- Recommended: Master Import File ---
+            master_key = [k for k in crm_files if "master_import" in k][0]
+            master_df = crm_files[master_key]
+            st.markdown("**Recommended: Master Import File**")
+            st.download_button(
+                label=f"Download {master_key}",
+                data=master_df.to_csv(index=False),
+                file_name=master_key,
+                mime="text/csv",
+                key="crm_dl_master",
+            )
 
-            # ZIP download with all CRM files
+            # --- Individual Object Files (collapsible) ---
+            individual_files = {
+                k: v for k, v in crm_files.items()
+                if k.endswith(".csv") and "master" not in k
+            }
+            with st.expander("Individual Object Files"):
+                cols = st.columns(min(len(individual_files), 4))
+                for i, (filename, df) in enumerate(individual_files.items()):
+                    col_idx = i % min(len(individual_files), 4)
+                    cols[col_idx].download_button(
+                        label=filename,
+                        data=df.to_csv(index=False),
+                        file_name=filename,
+                        mime="text/csv",
+                        key=f"crm_dl_{filename}",
+                    )
+
+            # --- ZIP download with all CRM files ---
             crm_zip = exporter.export_zip()
             st.download_button(
                 label=f"Download all {export_format} files as ZIP",
@@ -457,7 +473,7 @@ def main():
                 mime="application/zip",
             )
 
-            # Import guide
+            # --- Import guide ---
             guide_key = [k for k in crm_files if k.endswith(".md")]
             if guide_key:
                 with st.expander("Import Guide"):
