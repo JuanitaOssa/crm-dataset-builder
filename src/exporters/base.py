@@ -96,10 +96,6 @@ class BaseCRMExporter(ABC):
         """
 
     @abstractmethod
-    def generate_master_activities(self) -> pd.DataFrame:
-        """Generate master activities file (one row per activity with association refs)."""
-
-    @abstractmethod
     def generate_import_guide(self) -> str:
         """Generate a markdown import guide for this CRM."""
 
@@ -171,9 +167,8 @@ class BaseCRMExporter(ABC):
         name = self.crm_name().lower()
         files = {}
 
-        # Master import files (recommended for import)
+        # Master import file (recommended for import)
         files[f"{name}_master_records.csv"] = self.generate_master_records()
-        files[f"{name}_master_activities.csv"] = self.generate_master_activities()
 
         # Individual object files with association columns
         for filename, df in self.generate_association_files().items():

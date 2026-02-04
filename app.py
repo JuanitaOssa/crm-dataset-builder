@@ -293,7 +293,6 @@ def main():
         #  Generate CRM export files if CRM format selected               #
         # -------------------------------------------------------------- #
         records_df = None
-        activities_master_df = None
         if export_format != "Standard CSV":
             exporter_map = {
                 "HubSpot": HubSpotExporter,
@@ -307,9 +306,7 @@ def main():
             )
             crm_files = exporter.export()
             records_key = [k for k in crm_files if "master_records" in k][0]
-            activities_key = [k for k in crm_files if "master_activities" in k][0]
             records_df = crm_files[records_key]
-            activities_master_df = crm_files[activities_key]
 
         # -------------------------------------------------------------- #
         #  Tabbed data preview                                            #
@@ -324,7 +321,6 @@ def main():
         ]
         if records_df is not None:
             tab_labels.append(f"Master Records ({len(records_df)} rows)")
-            tab_labels.append(f"Master Activities ({len(activities_master_df)} rows)")
 
         tabs = st.tabs(tab_labels)
 
@@ -338,9 +334,8 @@ def main():
             st.dataframe(filtered_activities, use_container_width=True, hide_index=True)
         if records_df is not None:
             with tabs[4]:
+                st.caption("One row per contact. Deals appear once with their primary contact.")
                 st.dataframe(records_df.head(25), use_container_width=True, hide_index=True)
-            with tabs[5]:
-                st.dataframe(activities_master_df.head(25), use_container_width=True, hide_index=True)
 
         # -------------------------------------------------------------- #
         #  Summary statistics                                             #
@@ -454,28 +449,41 @@ def main():
                 "Create users/owners in your CRM before importing data."
             )
 
-            # --- Recommended: Master Import Files ---
-            st.markdown("**Recommended: Master Import Files**")
-            col_r, col_a = st.columns(2)
+            # --- Recommended: Import Files ---
+            crm_name_lower = export_format.lower()
+            activities_file_key = f"{crm_name_lower}_activities.csv"
+            guide_key = [k for k in crm_files if k.endswith(".md")]
+
+            st.markdown("**Recommended: Import Files**")
+            col_r, col_a, col_g = st.columns(3)
             col_r.download_button(
-                label=f"Download {records_key}",
+                label="Download Master Records",
                 data=records_df.to_csv(index=False),
                 file_name=records_key,
                 mime="text/csv",
                 key="crm_dl_records",
             )
-            col_a.download_button(
-                label=f"Download {activities_key}",
-                data=activities_master_df.to_csv(index=False),
-                file_name=activities_key,
-                mime="text/csv",
-                key="crm_dl_activities",
-            )
+            if activities_file_key in crm_files:
+                col_a.download_button(
+                    label="Download Activities",
+                    data=crm_files[activities_file_key].to_csv(index=False),
+                    file_name=activities_file_key,
+                    mime="text/csv",
+                    key="crm_dl_activities",
+                )
+            if guide_key:
+                col_g.download_button(
+                    label="Download Import Guide",
+                    data=crm_files[guide_key[0]],
+                    file_name=guide_key[0],
+                    mime="text/markdown",
+                    key="crm_dl_guide",
+                )
 
             # --- Individual Object Files (collapsible) ---
             individual_files = {
                 k: v for k, v in crm_files.items()
-                if k.endswith(".csv") and "master" not in k
+                if k.endswith(".csv") and "master" not in k and "users_reference" not in k
             }
             with st.expander("Individual Object Files"):
                 cols = st.columns(min(len(individual_files), 4))
@@ -492,14 +500,13 @@ def main():
             # --- ZIP download with all CRM files ---
             crm_zip = exporter.export_zip()
             st.download_button(
-                label=f"Download all {export_format} files as ZIP",
+                label=f"Download Everything (ZIP)",
                 data=crm_zip,
-                file_name=f"{export_format.lower()}_import.zip",
+                file_name=f"{crm_name_lower}_import.zip",
                 mime="application/zip",
             )
 
-            # --- Import guide ---
-            guide_key = [k for k in crm_files if k.endswith(".md")]
+            # --- Import guide (inline) ---
             if guide_key:
                 with st.expander("Import Guide"):
                     st.markdown(crm_files[guide_key[0]])

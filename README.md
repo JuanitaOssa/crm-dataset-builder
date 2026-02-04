@@ -4,6 +4,8 @@ A tool for generating realistic CRM datasets — accounts, contacts, deals, and 
 
 **Live demo:** [crm-dataset-builder.streamlit.app](https://crm-dataset-builder.streamlit.app)
 
+![CRM Dataset Builder screenshot](screenshot.png)
+
 ## Business Types
 
 Choose from three industry profiles, each with its own company names, pipelines, deal sizes, win rates, and activity patterns:
